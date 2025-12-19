@@ -29,6 +29,14 @@ python3 base626_calculator.py             # evaluate expressions visually
 
 Output artifacts (PNG strips, JSON tables, datasets) land under `out/` or a user-specified directory.
 
+## Regenerating outputs (kept out of version control)
+
+- **Digit strips (0–625):** `python3 export_0_625.py --out out/digits_0_625_row --order row --cell-px 20`
+- **Digit/symbol datasets:** `python3 gen_bit_dataset.py --out data/bits --include digits symbols --order row --csv`  
+  Verify with `python3 validate_bits_dataset.py --data data/bits --symbols out/symbols/decode_table_symbols.json`.
+- **System snapshot:** `python3 collect_system_info.py` writes a fresh `system_summary_*.txt`.
+- **Spatial brain plots/checkpoints:** rerun the relevant experiment/train scripts under `spatial_brain/experiments` to regenerate figures and new checkpoints (only the most recent nav2d checkpoint is retained by default).
+
 ## Core Modules
 
 - `base625_grid.py` – Foundation for generating 25×25 boolean grids, digit encoders, symbol glyph definitions, dataset helpers, and image rendering utilities.

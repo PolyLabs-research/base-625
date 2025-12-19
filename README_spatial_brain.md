@@ -33,3 +33,8 @@ You can select these via `--sheet-preset` on the 2D experiments. A new glyph-mod
 ```
 python -m spatial_brain.experiments.glyph_slots_25x25 --num-epochs 200 --beta-smooth-lambda 0.02
 ```
+
+## Artifacts and regeneration
+
+- Plots are not versioned to keep the repo light; rerun the experiment scripts under `spatial_brain/experiments` to regenerate figures.
+- Only the latest `nav2d` checkpoint is kept by default; retrain with `python -m spatial_brain.nav2d.train_rl` to produce a new series if needed.
