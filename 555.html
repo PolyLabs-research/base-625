@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Rat: Wedge Sensor Sandbox</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f0f12; color: #e0e0e0; font-family: 'Segoe UI', monospace; }
+        canvas { image-rendering: pixelated; }
+        .panel { background: #1a1a20; border: 1px solid #333; padding: 1rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .slider { -webkit-appearance: none; width: 100%; height: 4px; background: #333; outline: none; border-radius: 2px; }
+        .slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; background: #00d4ff; cursor: pointer; border-radius: 50%; }
+        .btn {
+            background: #2a2a30; border: 1px solid #444; color: #ccc;
+            padding: 0.4rem 0.8rem; cursor: pointer; transition: 0.2s;
+            font-family: inherit; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; border-radius: 4px;
+        }
+        .btn:hover { background: #3a3a42; border-color: #666; color: white; }
+        .btn-primary { background: #006655; border-color: #009988; color: #e0fff0; }
+        .btn-primary:hover { background: #008877; border-color: #00bb99; }
+        .stat-value { font-family: 'Courier New', monospace; font-weight: bold; }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <div class="flex-none p-4 border-b border-gray-800 bg-gray-900/50 backdrop-blur flex justify-between items-center">
+        <div>
+            <h1 class="text-xl font-bold text-cyan-400 flex items-center gap-2">
+                <span class="text-2xl">🧠</span> Quantum Wedge Navigator
+            </h1>
+            <p class="text-xs text-gray-500 mt-1">Orch-OR Biomimetic Engine • Finite Difference NLSE • Raycasting Vision</p>
+        </div>
+        <div class="flex gap-2">
+            <div class="flex items-center gap-2 mr-4">
+                <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse" id="status-dot"></span>
+                <span class="text-xs text-gray-400" id="status-text">Running</span>
+            </div>
+            <button id="btn-play" class="btn btn-primary">Pause</button>
+            <button id="btn-reset" class="btn">Reset Rat</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex gap-4 p-4 min-h-0">
+        
+        <!-- Left Column: Simulation Views -->
+        <div class="flex-1 flex flex-col gap-4 min-h-0">
+            
+            <!-- Arena -->
+            <div class="panel flex-1 flex flex-col relative overflow-hidden group">
+                <div class="absolute top-3 left-3 z-10 flex gap-2 pointer-events-none">
+                    <span class="bg-black/50 px-2 py-1 rounded text-xs border border-white/10">ARENA VIEW</span>
+                </div>
+                <canvas id="canvas-arena" class="w-full h-full object-contain bg-black rounded border border-gray-800 cursor-crosshair"></canvas>
+                <div class="absolute bottom-3 right-3 text-xs text-gray-500 pointer-events-none">
+                    Click to move Cheese
+                </div>
+            </div>
+
+            <!-- Quantum Brain Strip -->
+            <div class="panel h-48 flex flex-col shrink-0">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-xs text-purple-400 font-bold">MICROTUBULE QUANTUM STATE (UNROLLED CYLINDER)</span>
+                    <span class="text-[10px] text-gray-600">Y: Protofilaments (0-12) | X: Length</span>
+                </div>
+                <canvas id="canvas-brain" width="256" height="26" class="w-full h-full bg-black rounded border border-purple-900/30"></canvas>
+            </div>
+        </div>
+
+        <!-- Right Column: Controls & Stats -->
+        <div class="w-80 flex flex-col gap-4 shrink-0 overflow-y-auto">
+            
+            <!-- Stats Panel -->
+            <div class="panel">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 border-b border-gray-800 pb-2">Telemetry</h3>
+                
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-orange-400">Frustration (Pump Energy)</span>
+                            <span id="val-frust" class="stat-value">0.00</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div id="bar-frust" class="h-full bg-gradient-to-r from-orange-600 to-orange-400 transition-all duration-100" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-cyan-400">Visual Inhibition</span>
+                            <span id="val-inhib" class="stat-value">Active</span>
+                        </div>
+                        <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                            <div id="bar-inhib" class="h-full bg-cyan-500 transition-all duration-100" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-green-400">Score</span>
+                            <span id="val-score" class="stat-value text-lg text-green-400">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Panel -->
+            <div class="panel space-y-4">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 border-b border-gray-800 pb-2">Physics Parameters</h3>
+                
+                <div>
+                    <label class="flex justify-between text-xs text-gray-300 mb-1">
+                        Simulation Speed
+                        <span id="lbl-speed" class="text-gray-500">1x</span>
+                    </label>
+                    <input type="range" id="slider-speed" min="1" max="10" value="1" class="slider">
+                </div>
+
+                <div>
+                    <label class="flex justify-between text-xs text-gray-300 mb-1">
+                        Base Pump (Energy)
+                        <span id="lbl-pump" class="text-gray-500">1.2</span>
+                    </label>
+                    <input type="range" id="slider-pump" min="0.5" max="2.0" step="0.1" value="1.2" class="slider">
+                </div>
+
+                <div>
+                    <label class="flex justify-between text-xs text-gray-300 mb-1">
+                        Visual Inhibition Strength
+                        <span id="lbl-vis" class="text-gray-500">5.0</span>
+                    </label>
+                    <input type="range" id="slider-vis" min="0" max="10" step="0.5" value="5.0" class="slider">
+                </div>
+                
+                <div class="pt-2 border-t border-gray-800">
+                    <label class="flex items-center gap-2 text-xs cursor-pointer">
+                        <input type="checkbox" id="chk-rays" checked class="rounded bg-gray-800 border-gray-600 text-cyan-500 focus:ring-0">
+                        Show Vision Rays
+                    </label>
+                </div>
+            </div>
+
+            <!-- Memory IO -->
+            <div class="panel">
+                <h3 class="text-xs font-bold text-gray-400 uppercase mb-3 border-b border-gray-800 pb-2">Brain State</h3>
+                <div class="grid grid-cols-2 gap-2">
+                    <button id="btn-save" class="btn text-blue-300 border-blue-900/50 hover:bg-blue-900/20">Save Brain</button>
+                    <label class="btn text-purple-300 border-purple-900/50 hover:bg-purple-900/20 text-center">
+                        Load Brain
+                        <input type="file" id="file-load" class="hidden" accept=".json">
+                    </label>
+                </div>
+                <button id="btn-clear-mem" class="btn w-full mt-2 text-red-400 border-red-900/50 hover:bg-red-900/20">Wipe Memory</button>
+            </div>
+
+            <!-- How it works -->
+            <div class="p-3 rounded bg-blue-900/10 border border-blue-900/30 text-[10px] text-blue-200 leading-relaxed">
+                <strong class="text-blue-400 block mb-1">Observation Guide:</strong>
+                1. <strong>Green Rays</strong> are vision. Red means a wall is detected.<br>
+                2. <strong>Microtubule (Left Panel)</strong> displays quantum probability.<br>
+                3. <strong>Shadows:</strong> Wall detection creates black bands on the microtubule, inhibiting collapse in that direction.<br>
+                4. <strong>Bright Flash:</strong> Objective Reduction (Decision) occurred.
+            </div>
+
+        </div>
+    </div>
+
+<script>
+/**
+ * ORCH-OR QUANTUM PHYSICS ENGINE (JS/WEBGL OPTIMIZED)
+ * Implements 1D NLSE on a Cylinder Topology with Inhibitory Sensory Input.
+ */
+
+// Configuration
+const CONFIG = {
+    Ny: 13,         // Protofilaments (Circumference)
+    Nx: 64,         // Length
+    dt: 0.1,
+    alpha: 0.5,     // Diffusion
+    base_gamma: 2.0,
+    decay: 0.1,
+    h_bar: 3.0
+};
+
+// Physics State
+let currentState = {
+    pump: 1.2,
+    visualStrength: 5.0,
+    speed: 1,
+    running: true
+};
+
+class Microtubule {
+    constructor() {
+        this.size = CONFIG.Ny * CONFIG.Nx;
+        this.psi_r = new Float32Array(this.size);
+        this.psi_i = new Float32Array(this.size);
+        this.time_in_superposition = 0;
+        this.resetWavefunction();
+    }
+
+    resetWavefunction() {
+        for (let i = 0; i < this.size; i++) {
+            this.psi_r[i] = (Math.random() - 0.5) * 0.1;
+            this.psi_i[i] = (Math.random() - 0.5) * 0.1;
+        }
+        this.time_in_superposition = 0;
+    }
+
+    idx(y, x) {
+        // Periodic Y (Cylinder), Clamped X
+        let yy = (y + CONFIG.Ny) % CONFIG.Ny;
+        if (yy < 0) yy += CONFIG.Ny;
+        let xx = Math.max(0, Math.min(x, CONFIG.Nx - 1));
+        return yy * CONFIG.Nx + xx;
+    }
+
+    step(spatialInput, targetBias, visualInhibition) {
+        // Visual Inhibition SUBTRACTS from pump
+        // We apply visualInhibition array to the pump calc
+        // Note: In JS we'll do this per-cell in the loop
+        
+        const next_r = new Float32Array(this.size);
+        const next_i = new Float32Array(this.size);
+
+        // Reusable vars
+        let maxDensity = 0;
+        let maxIdx = 0;
+
+        // Finite Difference Step
+        for (let y = 0; y < CONFIG.Ny; y++) {
+            for (let x = 0; x < CONFIG.Nx; x++) {
+                const i = this.idx(y, x);
+                
+                // 1. Calculate Local Pump
+                // Base + Spatial(Grid) + Smell(Target) - Vision(Inhibition)
+                // Visual inhibition is a 1D array (length 13) mapped to Y rows
+                let inhib = visualInhibition ? visualInhibition[y] : 0;
+                let P = currentState.pump + spatialInput + (targetBias * 0.5) - (inhib * currentState.visualStrength);
+                if (P < 0) P = 0;
+
+                // 2. Laplacian (Diffusion)
+                const cr = this.psi_r[i];
+                const ci = this.psi_i[i];
+                
+                const up = this.idx(y-1, x);
+                const down = this.idx(y+1, x);
+                const left = this.idx(y, x-1);
+                const right = this.idx(y, x+1);
+
+                const lap_r = this.psi_r[up] + this.psi_r[down] + this.psi_r[left] + this.psi_r[right] - 4*cr;
+                const lap_i = this.psi_i[up] + this.psi_i[down] + this.psi_i[left] + this.psi_i[right] - 4*ci;
+
+                // 3. Non-Linearity
+                const density = cr*cr + ci*ci;
+                if (density > maxDensity) { maxDensity = density; maxIdx = i; }
+                
+                const nonlinear = CONFIG.base_gamma * density;
+
+                // 4. Time Evolution (Split Operator approximation)
+                // Real part change
+                const dr = - (CONFIG.alpha * lap_i + nonlinear * ci) + (P - CONFIG.decay) * cr;
+                // Imag part change
+                const di = (CONFIG.alpha * lap_r + nonlinear * cr) + (P - CONFIG.decay) * ci;
+
+                next_r[i] = cr + dr * CONFIG.dt;
+                next_i[i] = ci + di * CONFIG.dt;
+            }
+        }
+
+        this.psi_r = next_r;
+        this.psi_i = next_i;
+
+        // Objective Reduction Logic
+        let decision = null;
+        
+        if (maxDensity > 1.0) {
+            const threshold = CONFIG.h_bar / maxDensity;
+            if (this.time_in_superposition > threshold) {
+                // Collapse!
+                const y = Math.floor(maxIdx / CONFIG.Nx);
+                // Map Y to Angle
+                const angle = (y / CONFIG.Ny) * 2 * Math.PI;
+                decision = { x: Math.cos(angle), y: Math.sin(angle) };
+                
+                this.resetWavefunction();
+            } else {
+                this.time_in_superposition += CONFIG.dt;
+            }
+        } else {
+            this.time_in_superposition *= 0.95;
+        }
+
+        return { decision, maxDensity };
+    }
+}
+
+class Rat {
+    constructor(arenaSize) {
+        this.arenaSize = arenaSize;
+        this.pos = { x: 10, y: 2 };
+        this.vel = { x: 0, y: 0.5 };
+        this.target = { x: 10, y: 18 };
+        
+        this.viewDist = 6.0;
+        this.rays = []; // Array of {x, y, hit, dist}
+        this.numRays = 13;
+        
+        this.walls = [
+            {x: 5, y: 10, w: 10, h: 1}, // Bottom bar
+            {x: 5, y: 10, w: 1, h: 6},  // Left arm
+            {x: 14, y: 10, w: 1, h: 6}  // Right arm
+        ];
+        
+        this.score = 0;
+    }
+
+    castRays() {
+        this.rays = [];
+        const heading = Math.atan2(this.vel.y, this.vel.x);
+        const fov = Math.PI / 2;
+        const startAngle = heading - fov/2;
+        const step = fov / (this.numRays - 1);
+
+        const rayData = new Float32Array(this.numRays); // For brain
+
+        for (let i = 0; i < this.numRays; i++) {
+            const angle = startAngle + i * step;
+            const dx = Math.cos(angle);
+            const dy = Math.sin(angle);
+            
+            // Raymarch
+            let dist = this.viewDist;
+            let hit = false;
+            
+            // Simple step check (optimization: 20 steps)
+            for (let d = 0; d < this.viewDist; d += 0.3) {
+                const cx = this.pos.x + dx * d;
+                const cy = this.pos.y + dy * d;
+                
+                // Check collision
+                if (this.checkCol(cx, cy)) {
+                    dist = d;
+                    hit = true;
+                    break;
+                }
+            }
+            
+            this.rays.push({ 
+                x: this.pos.x + dx * dist, 
+                y: this.pos.y + dy * dist, 
+                hit 
+            });
+            
+            // Inhibition Value: Close = 1.0, Far = 0.0
+            rayData[i] = hit ? Math.pow(1.0 - (dist / this.viewDist), 2) : 0;
+        }
+        return rayData;
+    }
+
+    checkCol(x, y) {
+        // Arena bounds
+        if (x < 0 || x > this.arenaSize || y < 0 || y > this.arenaSize) return true;
+        // Walls
+        for (let w of this.walls) {
+            if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) return true;
+        }
+        return false;
+    }
+
+    update(decision) {
+        // Steering
+        if (decision) {
+            // Visual steering is precise
+            this.vel.x += decision.x * 0.2;
+            this.vel.y += decision.y * 0.2;
+            
+            // Speed limit
+            const speed = Math.hypot(this.vel.x, this.vel.y);
+            if (speed > 0.3) {
+                this.vel.x = (this.vel.x / speed) * 0.3;
+                this.vel.y = (this.vel.y / speed) * 0.3;
+            }
+        }
+
+        // Move
+        const nx = this.pos.x + this.vel.x;
+        const ny = this.pos.y + this.vel.y;
+
+        if (this.checkCol(nx, ny)) {
+            // Bounce
+            this.vel.x *= -0.5;
+            this.vel.y *= -0.5;
+            return { frustration: 1.0 }; // Spike stress
+        } else {
+            this.pos.x = nx;
+            this.pos.y = ny;
+        }
+
+        // Goal
+        const d = Math.hypot(this.pos.x - this.target.x, this.pos.y - this.target.y);
+        if (d < 1.0) {
+            this.score++;
+            this.resetPos(); // New round
+            return { frustration: 0, win: true };
+        }
+
+        return { frustration: 0 };
+    }
+
+    resetPos() {
+        this.pos = { x: 10, y: 2 };
+        this.vel = { x: 0, y: 0.5 };
+        // Randomize target slightly to keep it interesting
+        this.target = { 
+            x: 5 + Math.random() * 10, 
+            y: 15 + Math.random() * 4 
+        };
+    }
+    
+    // Force set position (mouse drag)
+    setPos(x, y) {
+        this.pos.x = Math.max(0, Math.min(this.arenaSize, x));
+        this.pos.y = Math.max(0, Math.min(this.arenaSize, y));
+    }
+    
+    setTarget(x, y) {
+        this.target.x = Math.max(0, Math.min(this.arenaSize, x));
+        this.target.y = Math.max(0, Math.min(this.arenaSize, y));
+    }
+}
+
+/**
+ * APP RUNTIME
+ */
+const cvsArena = document.getElementById('canvas-arena');
+const ctxArena = cvsArena.getContext('2d');
+const cvsBrain = document.getElementById('canvas-brain');
+const ctxBrain = cvsBrain.getContext('2d');
+
+// Buffers
+const brainImg = ctxBrain.createImageData(CONFIG.Nx, CONFIG.Ny);
+
+// Objects
+const mt = new Microtubule();
+const rat = new Rat(20);
+let frustration = 0;
+
+// Scaling
+function getScale() {
+    return cvsArena.width / rat.arenaSize;
+}
+
+// Interaction
+let dragTarget = null; // 'rat' or 'cheese'
+
+cvsArena.addEventListener('mousedown', e => {
+    const rect = cvsArena.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / (rect.width / rat.arenaSize);
+    const y = (e.clientY - rect.top) / (rect.height / rat.arenaSize);
+    
+    const dRat = Math.hypot(x - rat.pos.x, y - rat.pos.y);
+    const dCheese = Math.hypot(x - rat.target.x, y - rat.target.y);
+    
+    if (dRat < 2) dragTarget = 'rat';
+    else if (dCheese < 2) dragTarget = 'cheese';
+});
+
+window.addEventListener('mousemove', e => {
+    if (!dragTarget) return;
+    const rect = cvsArena.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / (rect.width / rat.arenaSize);
+    const y = (e.clientY - rect.top) / (rect.height / rat.arenaSize);
+    
+    if (dragTarget === 'rat') rat.setPos(x, y);
+    if (dragTarget === 'cheese') rat.setTarget(x, y);
+});
+
+window.addEventListener('mouseup', () => dragTarget = null);
+
+// Animation Loop
+function loop() {
+    if (currentState.running) {
+        for (let s=0; s<currentState.speed; s++) {
+            // 1. Sensation
+            const rays = rat.castRays(); // Returns inhibition array [13]
+            
+            // 2. Target Bias (Smell)
+            const dx = rat.target.x - rat.pos.x;
+            const dy = rat.target.y - rat.pos.y;
+            // Only weak smell signal
+            const dist = Math.hypot(dx, dy);
+            const smellStrength = 1.0 / (1 + dist*0.1); 
+            
+            // 3. Physics Step
+            // Note: We pass 0 for spatial input grid to focus on Wedge logic for now
+            const res = mt.step(0.1, smellStrength, rays);
+            
+            // 4. Rat Move
+            const outcome = rat.update(res.decision);
+            
+            // Update Frustration UI
+            if (outcome.frustration > 0) frustration = Math.min(1, frustration + 0.1);
+            else frustration = Math.max(0, frustration - 0.01);
+            
+            // Render Brain to buffer (only on last sub-step)
+            if (s === currentState.speed - 1) {
+                const d = mt.psi_r; // Real part for density roughly
+                const di = mt.psi_i;
+                for (let i=0; i<mt.size; i++) {
+                    const mag = d[i]*d[i] + di[i]*di[i];
+                    const val = Math.min(255, mag * 800);
+                    // Infernon map roughly
+                    brainImg.data[i*4+0] = val; // R
+                    brainImg.data[i*4+1] = val * 0.2; // G
+                    brainImg.data[i*4+2] = val * 0.5; // B
+                    brainImg.data[i*4+3] = 255;
+                }
+                ctxBrain.putImageData(brainImg, 0, 0);
+            }
+        }
+        
+        // Update UI Stats
+        document.getElementById('val-frust').innerText = frustration.toFixed(2);
+        document.getElementById('bar-frust').style.width = (frustration * 100) + "%";
+        document.getElementById('val-score').innerText = rat.score;
+        
+        // Visual Inhibition Bar (Avg of rays)
+        const avgInhib = rat.castRays().reduce((a,b)=>a+b,0) / 13;
+        document.getElementById('bar-inhib').style.width = (avgInhib * 100) + "%";
+    }
+
+    drawArena();
+    requestAnimationFrame(loop);
+}
+
+function drawArena() {
+    // Clear
+    ctxArena.fillStyle = '#050505';
+    ctxArena.fillRect(0, 0, cvsArena.width, cvsArena.height);
+    const s = getScale();
+
+    // Walls
+    ctxArena.fillStyle = '#333';
+    for (let w of rat.walls) {
+        ctxArena.fillRect(w.x * s, w.y * s, w.w * s, w.h * s);
+    }
+
+    // Target
+    ctxArena.fillStyle = '#ffd700';
+    ctxArena.beginPath();
+    ctxArena.arc(rat.target.x * s, rat.target.y * s, 8, 0, Math.PI*2);
+    ctxArena.fill();
+
+    // Rays
+    if (document.getElementById('chk-rays').checked) {
+        ctxArena.lineWidth = 1;
+        for (let r of rat.rays) {
+            ctxArena.strokeStyle = r.hit ? '#ff3333' : '#00ff88';
+            ctxArena.globalAlpha = 0.3;
+            ctxArena.beginPath();
+            ctxArena.moveTo(rat.pos.x * s, rat.pos.y * s);
+            ctxArena.lineTo(r.x * s, r.y * s);
+            ctxArena.stroke();
+        }
+        ctxArena.globalAlpha = 1.0;
+    }
+
+    // Rat
+    ctxArena.fillStyle = '#ff4444';
+    ctxArena.beginPath();
+    ctxArena.arc(rat.pos.x * s, rat.pos.y * s, 6, 0, Math.PI*2);
+    ctxArena.fill();
+    
+    // Heading
+    ctxArena.strokeStyle = '#fff';
+    ctxArena.beginPath();
+    ctxArena.moveTo(rat.pos.x * s, rat.pos.y * s);
+    ctxArena.lineTo((rat.pos.x + rat.vel.x*5) * s, (rat.pos.y + rat.vel.y*5) * s);
+    ctxArena.stroke();
+}
+
+// --- DOM Wiring ---
+document.getElementById('btn-play').onclick = function() {
+    currentState.running = !currentState.running;
+    this.innerText = currentState.running ? "Pause" : "Resume";
+    document.getElementById('status-dot').classList.toggle('bg-green-500');
+    document.getElementById('status-dot').classList.toggle('bg-yellow-500');
+    document.getElementById('status-text').innerText = currentState.running ? "Running" : "Paused";
+};
+
+document.getElementById('btn-reset').onclick = () => {
+    rat.pos = {x: 10, y: 2};
+    rat.vel = {x: 0, y: 0.5};
+    frustration = 0;
+    mt.resetWavefunction();
+};
+
+document.getElementById('slider-speed').oninput = (e) => {
+    currentState.speed = parseInt(e.target.value);
+    document.getElementById('lbl-speed').innerText = currentState.speed + "x";
+};
+
+document.getElementById('slider-pump').oninput = (e) => {
+    currentState.pump = parseFloat(e.target.value);
+    document.getElementById('lbl-pump').innerText = currentState.pump.toFixed(1);
+};
+
+document.getElementById('slider-vis').oninput = (e) => {
+    currentState.visualStrength = parseFloat(e.target.value);
+    document.getElementById('lbl-vis').innerText = currentState.visualStrength.toFixed(1);
+};
+
+// Start
+loop();
+
+</script>
+</body>
+</html>

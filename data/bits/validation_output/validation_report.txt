@@ -1,0 +1,9 @@
+Loaded: X=(637, 625) dtype=uint8, y=(637,) dtype=int64, classes in map=637
+Values in X are only 0/1: True
+Labels present: 637 unique
+All labels found in class_map.json
+Per-class count: min=1, max=1, mean=1.00
+Bit collisions (same bits, different labels): 0
+Digit self-consistency issues: 0
+Symbol grid parity mismatches: 0
+Wrote montages to data\bits\validation_output\montages

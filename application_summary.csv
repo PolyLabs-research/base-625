@@ -1,0 +1,2447 @@
+item_type,classification,relative_path,name,ext,size_bytes,modified_utc,sha256,details,content
+folder,folder,,base 625,,0,2025-10-29T11:50:44Z,,"Contains 2 subfolder(s), 9 file(s).",
+file,table,application_summary.csv,application_summary.csv,.csv,222303,2025-10-29T11:50:44Z,472cb6123b9ee5fc88a4370069a2bde2af67f295466358fcc5dcffed5eaa4bdc,"Headers: item_type, classification, relative_path, name, ext, size_bytes, modified_utc, sha256, details, content",
+file,script,base625_grid.py,base625_grid.py,.py,18718,2025-10-24T17:48:02Z,2995ecea951a85c799ce843c7df293d4741feccac7a1c5e02f830426a6fbf3be,,"# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+""""""
+base625_grid.py — Framework for a 25×25 grid numeral/symbol system (0..625 states)
+
+Quick overview
+--------------
+• Grid is 25×25 Boolean.
+• Numbers-as-count (""count mode""): k black cells ⇒ value k, for k in [0, 625].
+• Base-625 ""digit mode"": a digit is an integer d in [0, 624] drawn via a canonical fill order.
+• Symbols: pre-baked 25×25 glyphs (+, -, ×, ÷, =, (, ), ^, ·). Exact-match decoding provided.
+• Rendering: crisp PNGs with optional gridlines.
+• Datasets: generate token sequences (numbers converted to base-625 digits + operators), saved as an image strip and JSON.
+• CLI included. Run `python base625_grid.py -h` for commands.
+
+Design notes
+------------
+• Canonical fill order defaults to row-major (top-left → right, then down).
+  You can also choose a fixed-seed pseudorandom order for better spatial variety.
+• Decoding a *number panel* is simply `sum(grid)` (i.e., count of black cells).
+• Operator glyphs are designed so they do NOT look like monotonic row-major fills.
+• For base-625 digits, the value 625 is not a valid digit (max 624). In count mode,
+  625 (full grid) is allowed and may be useful as a reserved token if you like.
+
+Author: ChatGPT (GPT-5 Thinking)
+License: MIT
+""""""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import random
+from dataclasses import dataclass
+from typing import List, Tuple, Dict, Optional
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+GRID_N = 25  # 25x25
+GRID_CELLS = GRID_N * GRID_N  # 625
+
+
+# -----------------------------
+# Utility: Cell orders
+# -----------------------------
+
+def row_major_order(n: int = GRID_N) -> List[Tuple[int, int]]:
+    return [(r, c) for r in range(n) for c in range(n)]
+
+
+def snake_order(n: int = GRID_N) -> List[Tuple[int, int]]:
+    coords = []
+    for r in range(n):
+        cols = range(n) if r % 2 == 0 else range(n - 1, -1, -1)
+        for c in cols:
+            coords.append((r, c))
+    return coords
+
+
+def seeded_random_order(seed: int = 42, n: int = GRID_N) -> List[Tuple[int, int]]:
+    coords = row_major_order(n)
+    rng = random.Random(seed)
+    rng.shuffle(coords)
+    return coords
+
+
+ORDER_FACTORIES = {
+    ""row"": row_major_order,
+    ""snake"": snake_order,
+    # For reproducibility; change seed if you need a different static order
+    ""random42"": lambda n=GRID_N: seeded_random_order(42, n),
+}
+
+
+# -----------------------------
+# Grid helpers
+# -----------------------------
+
+def empty_grid(n: int = GRID_N) -> np.ndarray:
+    return np.zeros((n, n), dtype=bool)
+
+
+def fill_k_cells(k: int, order: str = ""row"", n: int = GRID_N) -> np.ndarray:
+    """"""
+    Returns a 25x25 boolean grid with exactly k cells filled (True),
+    according to the chosen cell order.
+    """"""
+    if not (0 <= k <= n * n):
+        raise ValueError(f""k must be in [0, {n*n}], got {k}"")
+    coords = ORDER_FACTORIES[order](n)
+    grid = empty_grid(n)
+    for (r, c) in coords[:k]:
+        grid[r, c] = True
+    return grid
+
+
+def count_filled(grid: np.ndarray) -> int:
+    return int(grid.sum())
+
+
+# -----------------------------
+# Symbol glyphs (25x25 boolean)
+# -----------------------------
+
+def _draw_rect(grid: np.ndarray, r0: int, r1: int, c0: int, c1: int) -> None:
+    grid[r0:r1, c0:c1] = True
+
+
+def _draw_h_line(grid: np.ndarray, r: int, c0: int, c1: int, thickness: int = 2) -> None:
+    _draw_rect(grid, max(0, r - thickness // 2), min(GRID_N, r + (thickness + 1) // 2), c0, c1)
+
+
+def _draw_v_line(grid: np.ndarray, c: int, r0: int, r1: int, thickness: int = 2) -> None:
+    _draw_rect(grid, r0, r1, max(0, c - thickness // 2), min(GRID_N, c + (thickness + 1) // 2))
+
+
+def glyph_plus(thickness: int = 3) -> np.ndarray:
+    g = empty_grid()
+    mid = GRID_N // 2
+    pad = GRID_N // 6
+    _draw_h_line(g, mid, pad, GRID_N - pad, thickness)
+    _draw_v_line(g, mid, pad, GRID_N - pad, thickness)
+    return g
+
+
+def glyph_minus(thickness: int = 3) -> np.ndarray:
+    g = empty_grid()
+    mid = GRID_N // 2
+    pad = GRID_N // 6
+    _draw_h_line(g, mid, pad, GRID_N - pad, thickness)
+    return g
+
+
+def glyph_equals(thickness: int = 3, gap: int = 3) -> np.ndarray:
+    g = empty_grid()
+    mid = GRID_N // 2
+    pad = GRID_N // 6
+    _draw_h_line(g, mid - gap, pad, GRID_N - pad, thickness)
+    _draw_h_line(g, mid + gap, pad, GRID_N - pad, thickness)
+    return g
+
+
+def glyph_times(thickness: int = 2) -> np.ndarray:
+    g = empty_grid()
+    # Diagonals for an 'x'
+    for i in range(GRID_N):
+        _draw_v_line(g, i, max(0, i - thickness), min(GRID_N, i + thickness), 1)
+        j = GRID_N - 1 - i
+        _draw_v_line(g, i, max(0, j - thickness), min(GRID_N, j + thickness), 1)
+    return g
+
+
+def glyph_divide(thickness: int = 2) -> np.ndarray:
+    g = empty_grid()
+    mid = GRID_N // 2
+    pad = GRID_N // 6
+    _draw_h_line(g, mid, pad, GRID_N - pad, thickness)
+    # Dots
+    dot_r = GRID_N // 6
+    _draw_rect(g, pad - dot_r // 2, pad + dot_r // 2, mid - dot_r // 2, mid + dot_r // 2)
+    _draw_rect(g, GRID_N - pad - dot_r // 2, GRID_N - pad + dot_r // 2, mid - dot_r // 2, mid + dot_r // 2)
+    return g
+
+
+def glyph_dot(size: int = 3) -> np.ndarray:
+    g = empty_grid()
+    mid = GRID_N // 2
+    _draw_rect(g, mid - size, mid + size + 1, mid - size, mid + size + 1)
+    return g
+
+
+def glyph_pow(thickness: int = 2) -> np.ndarray:
+    # Caret ""^"" like shape
+    g = empty_grid()
+    # Draw a shallow '^' by two lines
+    for i in range(GRID_N // 2):
+        _draw_rect(g, GRID_N // 3 - i, GRID_N // 3 - i + thickness, GRID_N // 4 + i, GRID_N // 4 + i + thickness)
+        _draw_rect(g, GRID_N // 3 - i, GRID_N // 3 - i + thickness, GRID_N - GRID_N // 4 - i - thickness, GRID_N - GRID_N // 4 - i)
+    return g
+
+
+def glyph_lparen(thickness: int = 2) -> np.ndarray:
+    g = empty_grid()
+    # Draw a ""("" using a vertical stroke with hooks
+    pad = GRID_N // 6
+    _draw_v_line(g, pad, pad, GRID_N - pad, thickness)
+    # Hooks top/bottom
+    _draw_h_line(g, pad, pad, pad + GRID_N // 6, thickness)
+    _draw_h_line(g, GRID_N - pad, pad, pad + GRID_N // 6, thickness)
+    return g
+
+
+def glyph_rparen(thickness: int = 2) -> np.ndarray:
+    g = empty_grid()
+    pad = GRID_N - GRID_N // 6
+    _draw_v_line(g, pad, GRID_N // 6, GRID_N - GRID_N // 6, thickness)
+    _draw_h_line(g, GRID_N // 6, GRID_N - GRID_N // 6 - GRID_N // 6, pad, thickness)
+    _draw_h_line(g, GRID_N - GRID_N // 6, GRID_N - GRID_N // 6 - GRID_N // 6, pad, thickness)
+    return g
+
+
+SYMBOLS: Dict[str, np.ndarray] = {
+    ""PLUS"": glyph_plus(),
+    ""MINUS"": glyph_minus(),
+    ""TIMES"": glyph_times(),
+    ""DIV"": glyph_divide(),
+    ""EQUALS"": glyph_equals(),
+    ""DOT"": glyph_dot(),
+    ""POW"": glyph_pow(),
+    ""LPAREN"": glyph_lparen(),
+    ""RPAREN"": glyph_rparen(),
+}
+
+
+def decode_symbol(grid: np.ndarray) -> Optional[str]:
+    """"""Exact boolean match decoder. Returns symbol name or None.""""""
+    for name, g in SYMBOLS.items():
+        if grid.shape == g.shape and np.array_equal(grid, g):
+            return name
+    return None
+
+
+# -----------------------------
+# Base conversion helpers
+# -----------------------------
+
+def int_to_base625(n: int) -> List[int]:
+    """"""Convert non-negative integer to base-625 digits (MSD → LSD). 0 => [0].""""""
+    if n < 0:
+        raise ValueError(""Only non-negative integers supported"")
+    if n == 0:
+        return [0]
+    digits = []
+    base = 625
+    while n > 0:
+        n, r = divmod(n, base)
+        digits.append(r)
+    return list(reversed(digits))
+
+
+def base625_to_int(digits: List[int]) -> int:
+    base = 625
+    val = 0
+    for d in digits:
+        if not (0 <= d <= 624):
+            raise ValueError(""Base-625 digits must be in [0, 624]"")
+        val = val * base + d
+    return val
+
+
+# -----------------------------
+# Rendering
+# -----------------------------
+
+def grid_to_image(grid: np.ndarray, cell_px: int = 20, draw_grid: bool = True) -> Image.Image:
+    n = grid.shape[0]
+    W = n * cell_px
+    H = n * cell_px
+    img = Image.new(""RGB"", (W + 1, H + 1), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # Paint cells
+    for r in range(n):
+        for c in range(n):
+            x0 = c * cell_px
+            y0 = r * cell_px
+            x1 = x0 + cell_px
+            y1 = y0 + cell_px
+            fill = (0, 0, 0) if grid[r, c] else (255, 255, 255)
+            draw.rectangle([x0, y0, x1, y1], fill=fill)
+
+    # Gridlines
+    if draw_grid:
+        for c in range(n + 1):
+            x = c * cell_px
+            draw.line([(x, 0), (x, H)], fill=(0, 0, 0), width=1)
+        for r in range(n + 1):
+            y = r * cell_px
+            draw.line([(0, y), (W, y)], fill=(0, 0, 0), width=1)
+
+    return img
+
+
+def strip_to_image(panels: List[np.ndarray], gap_px: int = 8, cell_px: int = 20, draw_grid: bool = True) -> Image.Image:
+    """"""Concatenate panels horizontally with a small gap.""""""
+    if not panels:
+        raise ValueError(""No panels"")
+    rendered = [grid_to_image(p, cell_px=cell_px, draw_grid=draw_grid) for p in panels]
+    W = sum(im.width for im in rendered) + gap_px * (len(rendered) - 1)
+    H = max(im.height for im in rendered)
+    out = Image.new(""RGB"", (W, H), (255, 255, 255))
+    x = 0
+    for i, im in enumerate(rendered):
+        out.paste(im, (x, 0))
+        x += im.width + gap_px
+    return out
+
+
+# -----------------------------
+# Token types
+# -----------------------------
+
+@dataclass(frozen=True)
+class Token:
+    kind: str  # ""DIGIT"", ""NUMBER"", or a symbol name like ""PLUS""
+    value: Optional[int] = None  # for digits or number-in-count-mode
+
+
+def encode_number_as_count(k: int, order: str = ""row"") -> np.ndarray:
+    """"""0..625 inclusive -> grid.""""""
+    if not (0 <= k <= GRID_CELLS):
+        raise ValueError(f""Number must be in [0, {GRID_CELLS}]"")
+    return fill_k_cells(k, order=order, n=GRID_N)
+
+
+def encode_digit(d: int, order: str = ""row"") -> np.ndarray:
+    if not (0 <= d <= 625):                     # was 0..624
+        raise ValueError(""Base-626 digit must be in [0, 625]"")
+    return fill_k_cells(d, order=order, n=GRID_N)
+
+
+def decode_number_from_count(grid: np.ndarray) -> int:
+    """"""Inverse of encode_number_as_count: simply count black cells.""""""
+    return count_filled(grid)
+
+
+def encode_symbol(name: str) -> np.ndarray:
+    up = name.upper()
+    if up not in SYMBOLS:
+        raise KeyError(f""Unknown symbol {name}. Known: {list(SYMBOLS.keys())}"")
+    return SYMBOLS[up].copy()
+
+
+# -----------------------------
+# Expression utilities
+# -----------------------------
+
+def parse_simple_expr(expr: str) -> List[str]:
+    """"""
+    Tokenize a very simple expression with integers and +-*/^()=.
+    E.g. ""12 + 3*4 = 24""
+    Returns a list like [""12"", ""+"", ""3"", ""*"", ""4"", ""="", ""24""]
+    """"""
+    out = []
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch.isdigit():
+            j = i
+            while j < len(expr) and expr[j].isdigit():
+                j += 1
+            out.append(expr[i:j])
+            i = j
+            continue
+        if ch in ""+-*/^=()"":
+            out.append(ch)
+            i += 1
+            continue
+        raise ValueError(f""Unsupported character: {ch!r}"")
+    return out
+
+
+SYMBOL_NAME_BY_CHAR = {
+    ""+"": ""PLUS"",
+    ""-"": ""MINUS"",
+    ""*"": ""TIMES"",
+    ""/"": ""DIV"",
+    ""="": ""EQUALS"",
+    ""^"": ""POW"",
+    ""("": ""LPAREN"",
+    "")"": ""RPAREN"",
+}
+
+
+def encode_expr_to_panels(expr: str, order: str = ""row"", as_digits: bool = True) -> List[np.ndarray]:
+    """"""
+    Convert an ASCII expression to a sequence of 25x25 panels.
+    Numbers become either:
+      • as_digits=True  -> base-625 digits (each 0..624) across multiple panels
+      • as_digits=False -> single panel in count-mode (0..625)  [WARNING: may overflow 625]
+    Operators become their glyph panels.
+    """"""
+    tokens = parse_simple_expr(expr)
+    panels: List[np.ndarray] = []
+    for t in tokens:
+        if t.isdigit():
+            val = int(t)
+            if as_digits:
+                digits = int_to_base625(val)  # list of base-625 digits
+                for d in digits:
+                    panels.append(encode_digit(d, order=order))
+            else:
+                if val > GRID_CELLS:
+                    raise ValueError(f""Value {val} exceeds 625 in count-mode; use digits mode."")
+                panels.append(encode_number_as_count(val, order=order))
+        else:
+            name = SYMBOL_NAME_BY_CHAR[t]
+            panels.append(encode_symbol(name))
+    return panels
+
+
+# -----------------------------
+# Dataset writer
+# -----------------------------
+
+def write_dataset_strip(expr: str, out_png: str, out_json: Optional[str] = None,
+                        order: str = ""row"", as_digits: bool = True,
+                        cell_px: int = 20, draw_grid: bool = True) -> None:
+    panels = encode_expr_to_panels(expr, order=order, as_digits=as_digits)
+    img = strip_to_image(panels, gap_px=8, cell_px=cell_px, draw_grid=draw_grid)
+    img.save(out_png)
+    if out_json:
+        meta = {
+            ""expr"": expr,
+            ""order"": order,
+            ""as_digits"": as_digits,
+            ""cell_px"": cell_px,
+            ""panels"": [{
+                ""kind"": (""DIGIT"" if p.sum() <= 624 else ""NUMBER"") if decode_symbol(p) is None else decode_symbol(p),
+                ""count"": int(p.sum())
+            } for p in panels]
+        }
+        with open(out_json, ""w"", encoding=""utf-8"") as f:
+            json.dump(meta, f, indent=2)
+
+
+# -----------------------------
+# CLI
+# -----------------------------
+
+def cli():
+    p = argparse.ArgumentParser(description=""Base-625 grid framework (25×25)"")
+    sub = p.add_subparsers(dest=""cmd"", required=True)
+
+    # encode-number (count-mode)
+    p_num = sub.add_parser(""encode-number"", help=""Encode a single number (0..625) as one panel (count-mode)."")
+    p_num.add_argument(""value"", type=int)
+    p_num.add_argument(""--order"", choices=list(ORDER_FACTORIES.keys()), default=""row"")
+    p_num.add_argument(""--cell-px"", type=int, default=20)
+    p_num.add_argument(""--no-grid"", action=""store_true"")
+    p_num.add_argument(""-o"", ""--out"", required=True)
+
+    # encode-digit (base-625 digit)
+    p_dig = sub.add_parser(""encode-digit"", help=""Encode a single base-625 digit (0..624)."")
+    p_dig.add_argument(""value"", type=int)
+    p_dig.add_argument(""--order"", choices=list(ORDER_FACTORIES.keys()), default=""row"")
+    p_dig.add_argument(""--cell-px"", type=int, default=20)
+    p_dig.add_argument(""--no-grid"", action=""store_true"")
+    p_dig.add_argument(""-o"", ""--out"", required=True)
+
+    # encode-expr
+    p_expr = sub.add_parser(""encode-expr"", help=""Encode an ASCII expression into a horizontal strip image."")
+    p_expr.add_argument(""expr"", type=str)
+    p_expr.add_argument(""--order"", choices=list(ORDER_FACTORIES.keys()), default=""row"")
+    p_expr.add_argument(""--as-digits"", action=""store_true"", help=""Render numbers as base-625 digit panels."")
+    p_expr.add_argument(""--count-mode"", dest=""as_digits"", action=""store_false"", help=""Render each number in a single count-mode panel (0..625)."")
+    p_expr.add_argument(""--cell-px"", type=int, default=20)
+    p_expr.add_argument(""--no-grid"", action=""store_true"")
+    p_expr.add_argument(""-o"", ""--out"", required=True)
+    p_expr.add_argument(""--meta"", help=""Optional JSON metadata path."")
+
+    # decode-number
+    p_dec = sub.add_parser(""decode-number"", help=""Decode a single panel by counting black cells."")
+    p_dec.add_argument(""png"", type=str)
+
+    # symbol-sheet
+    p_sy = sub.add_parser(""symbol-sheet"", help=""Export a sheet with all operator glyphs."")
+    p_sy.add_argument(""-o"", ""--out"", required=True)
+    p_sy.add_argument(""--cell-px"", type=int, default=20)
+    p_sy.add_argument(""--no-grid"", action=""store_true"")
+
+    args = p.parse_args()
+
+    if args.cmd == ""encode-number"":
+        grid = encode_number_as_count(args.value, order=args.order)
+        img = grid_to_image(grid, cell_px=args.cell_px, draw_grid=(not args.no_grid))
+        img.save(args.out)
+        print(f""Saved {args.out}"")
+
+    elif args.cmd == ""encode-digit"":
+        grid = encode_digit(args.value, order=args.order)
+        img = grid_to_image(grid, cell_px=args.cell_px, draw_grid=(not args.no_grid))
+        img.save(args.out)
+        print(f""Saved {args.out}"")
+
+    elif args.cmd == ""encode-expr"":
+        panels = encode_expr_to_panels(args.expr, order=args.order, as_digits=args.as_digits)
+        img = strip_to_image(panels, cell_px=args.cell_px, draw_grid=(not args.no_grid))
+        img.save(args.out)
+        if args.meta:
+            meta = {
+                ""expr"": args.expr,
+                ""order"": args.order,
+                ""as_digits"": bool(args.as_digits),
+                ""panels"": [{""is_symbol"": decode_symbol(p) is not None,
+                            ""symbol"": decode_symbol(p),
+                            ""black_cells"": int(p.sum())}
+                           for p in panels]
+            }
+            with open(args.meta, ""w"", encoding=""utf-8"") as f:
+                json.dump(meta, f, indent=2)
+        print(f""Saved {args.out}"")
+
+    elif args.cmd == ""decode-number"":
+        # Simple loader + count
+        im = Image.open(args.png).convert(""RGB"")
+        # Infer cell size & grid by splitting consistently — assumes the image was generated by this script.
+        # Find cell size by dividing width by 25 (approx)
+        cell_px = round((im.width - 1) / GRID_N)
+        # Rebuild boolean grid by sampling cell center
+        g = empty_grid()
+        for r in range(GRID_N):
+            for c in range(GRID_N):
+                x = c * cell_px + cell_px // 2
+                y = r * cell_px + cell_px // 2
+                if x >= im.width:
+                    x = im.width - 1
+                if y >= im.height:
+                    y = im.height - 1
+                pix = im.getpixel((x, y))
+                g[r, c] = (sum(pix) < 255 * 3 / 2)  # darker = filled
+        print(count_filled(g))
+
+    elif args.cmd == ""symbol-sheet"":
+        panels = [SYMBOLS[name] for name in SYMBOLS.keys()]
+        img = strip_to_image(panels, cell_px=args.cell_px, draw_grid=(not args.no_grid))
+        img.save(args.out)
+        print(f""Saved {args.out}"")
+
+
+if __name__ == ""__main__"":
+    cli()
+"
+file,script,base626_calculator.py,base626_calculator.py,.py,12551,2025-10-25T18:08:50Z,7ea6731125277f43ddc565af3349a56522289bdb12b38bd66e142fd8b9f0bf1f,,"# base626_calculator.py
+#
+# GUI calculator that:
+#  • accepts a base-10 expression with normal symbols (+ - * / ^ ( ) [optional ""=""])
+#  • evaluates it safely (supports + - * / ^ and parentheses; integers only)
+#  • displays the expression as panels (digits in base-626, operators via your symbols JSON)
+#  • displays ""= <answer>"" as panels, and the plain-text answer
+#
+# Requirements: pillow, numpy, your base625_grid.py, your symbols JSON generated earlier.
+#
+# Run:
+#   py -3.12 base626_calculator.py
+#
+# Notes:
+#  • Uses row-major fill by default; you can switch order in the dropdown.
+#  • For base-626 digits: 0..625 is one digit; we render d=0..624 via encode_digit,
+#    and d=625 via count-mode panel (625 filled cells).
+
+from __future__ import annotations
+
+import json
+import re
+import tkinter as tk
+from dataclasses import dataclass
+from pathlib import Path
+from tkinter import ttk, messagebox
+
+from PIL import Image, ImageTk
+
+# Import your renderer
+from base625_grid import (
+    GRID_CELLS,
+    GRID_N,
+    encode_digit,
+    encode_number_as_count,
+    grid_to_image,
+)
+
+# ---------- Config ----------
+SYMBOLS_JSON = Path(""out"") / ""symbols"" / ""decode_table_symbols.json""
+DEFAULT_ORDER = ""row""         # row | snake | random42
+DEFAULT_CELL_PX = 20
+DEFAULT_GAP_PX = 8            # default gap between panels in a strip
+
+# ---------- Utility: safe eval ----------
+# We support integers, +, -, *, /, ^, parentheses.
+TOKEN_RE = re.compile(r""\s*([0-9]+|[\+\-\*\/\^\(\)=])\s*"")
+
+def tokenize(expr: str):
+    pos = 0
+    out = []
+    while pos < len(expr):
+        m = TOKEN_RE.match(expr, pos)
+        if not m:
+            raise ValueError(f""Invalid character near: {expr[pos:pos+12]!r}"")
+        tok = m.group(1)
+        out.append(tok)
+        pos = m.end()
+    return out
+
+def eval_safe(expr: str) -> int | float:
+    """"""Evaluate a simple arithmetic expression safely.""""""
+    # If the user typed '=', evaluate only the left side for the result display.
+    if ""="" in expr:
+        expr = expr.split(""="", 1)[0]
+
+    # Replace caret with Python power
+    expr = expr.replace(""^"", ""**"")
+
+    # Only allow digits/operators/parentheses
+    if not re.fullmatch(r""[0-9\+\-\*\/\^\(\)\s\=]*"", expr.replace(""**"", ""^"")):
+        raise ValueError(""Only digits and + - * / ^ ( ) and = are supported."")
+
+    # Evaluate in a restricted namespace
+    try:
+        # Use eval with empty globals and no builtins
+        val = eval(expr, {""__builtins__"": {}}, {})
+    except Exception as e:
+        raise ValueError(f""Could not evaluate: {e}"") from e
+
+    return val
+
+# ---------- Load symbol images ----------
+@dataclass
+class SymbolGlyph:
+    symbol: str     # pretty glyph, e.g., '+'
+    path: Path      # PNG path
+    image: Image.Image
+
+def load_symbols(json_path: Path) -> dict[str, SymbolGlyph]:
+    if not json_path.exists():
+        raise FileNotFoundError(f""Missing symbols JSON: {json_path}"")
+
+    with open(json_path, ""r"", encoding=""utf-8"") as f:
+        obj = json.load(f)
+
+    table: dict[str, SymbolGlyph] = {}
+    for item in obj.get(""items"", []):
+        sym = (item.get(""symbol"") or """").strip()
+        p = Path(item.get(""path"", """"))
+        if sym and p.exists():
+            try:
+                img = Image.open(p).convert(""RGB"")
+                table[sym] = SymbolGlyph(symbol=sym, path=p, image=img)
+            except Exception:
+                pass
+    return table
+
+# We’ll map user-typed operators to the glyph symbol to use from the JSON.
+def map_op_to_glyph(op: str, table: dict[str, SymbolGlyph]) -> str | None:
+    """"""Return the 'symbol' key in the table for a given operator token from input.""""""
+    if op in table:
+        return op
+    # Prefer nice alternates if direct match not found
+    if op == ""*"":
+        for alt in (""×"", ""x"", ""·""):
+            if alt in table:
+                return alt
+    return None
+
+# ---------- Base-626 helpers ----------
+def int_to_base626(n: int) -> list[int]:
+    if n == 0:
+        return [0]
+    base = GRID_CELLS + 1  # 626
+    digs = []
+    while n > 0:
+        n, r = divmod(n, base)
+        digs.append(r)
+    return list(reversed(digs))
+
+def digit_to_panel(d: int, order: str, cell_px: int, draw_grid: bool = True) -> Image.Image:
+    """"""Render one base-626 digit to a 25×25 panel image at the requested cell size.""""""
+    if 0 <= d <= 624:
+        return grid_to_image(encode_digit(d, order=order), cell_px=cell_px, draw_grid=draw_grid)
+    elif d == 625:
+        # Use count-mode to render 625 (full grid)
+        return grid_to_image(encode_number_as_count(625, order=order), cell_px=cell_px, draw_grid=draw_grid)
+    else:
+        raise ValueError(""Digit out of range for base-626"")
+
+def scale_panel_to_cell_px(img: Image.Image, cell_px: int) -> Image.Image:
+    """"""Scale a 25×25 panel image to match the given cell size, keeping crisp edges.""""""
+    target_w = GRID_N * cell_px + 1
+    target_h = GRID_N * cell_px + 1
+    if img.width == target_w and img.height == target_h:
+        return img
+    return img.resize((target_w, target_h), resample=Image.NEAREST)
+
+# ---------- Stitching ----------
+def stitch_h(images: list[Image.Image], gap_px: int, bg=(240, 240, 240)) -> Image.Image:
+    if not images:
+        return Image.new(""RGB"", (1, 1), bg)
+    w = sum(im.width for im in images) + gap_px * (len(images) - 1)
+    h = max(im.height for im in images)
+    out = Image.new(""RGB"", (w, h), bg)
+    x = 0
+    for im in images:
+        out.paste(im, (x, 0))
+        x += im.width + gap_px
+    return out
+
+# ---------- GUI ----------
+class Calculator(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(""Base-626 Calculator"")
+        self.geometry(""1100x720"")
+
+        # state
+        self.symbols = load_symbols(SYMBOLS_JSON)
+        self.tk_expr = None
+        self.tk_ans = None
+
+        # top controls
+        top = ttk.Frame(self, padding=8)
+        top.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(top, text=""Expression:"").pack(side=tk.LEFT)
+        self.entry = ttk.Entry(top, width=46)
+        self.entry.pack(side=tk.LEFT, padx=(4, 12))
+        self.entry.insert(0, ""12 + 3*(4^2)"")
+
+        ttk.Button(top, text=""Render"", command=self.on_render).pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(top, text=""Order:"").pack(side=tk.LEFT, padx=(12, 4))
+        self.order_var = tk.StringVar(value=DEFAULT_ORDER)
+        ttk.Combobox(top, textvariable=self.order_var, values=[""row"", ""snake"", ""random42""], width=10, state=""readonly"").pack(side=tk.LEFT)
+
+        ttk.Label(top, text=""Cell px:"").pack(side=tk.LEFT, padx=(12, 4))
+        self.cell_var = tk.IntVar(value=DEFAULT_CELL_PX)
+        ttk.Spinbox(top, from_=6, to=48, textvariable=self.cell_var, width=6, command=self._refresh_if_rendered).pack(side=tk.LEFT)
+
+        ttk.Label(top, text=""Gap px:"").pack(side=tk.LEFT, padx=(12, 4))
+        self.gap_var = tk.IntVar(value=DEFAULT_GAP_PX)
+        ttk.Spinbox(top, from_=0, to=24, textvariable=self.gap_var, width=6, command=self._refresh_if_rendered).pack(side=tk.LEFT)
+
+        # result text
+        self.result_var = tk.StringVar(value=""Result: "")
+        ttk.Label(self, textvariable=self.result_var, padding=(8, 2)).pack(side=tk.TOP, anchor=""w"")
+
+        # canvases
+        ttk.Label(self, text=""Expression panels:"", padding=(8, 2)).pack(side=tk.TOP, anchor=""w"")
+        self.canvas_expr = tk.Canvas(self, bg=""#dddddd"", height=240)
+        self.canvas_expr.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        ttk.Label(self, text=""= Answer panels:"", padding=(8, 2)).pack(side=tk.TOP, anchor=""w"")
+        self.canvas_ans = tk.Canvas(self, bg=""#dddddd"", height=240)
+        self.canvas_ans.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        # internal cache of last render (to rescale on control changes)
+        self._last_tokens: list[str] | None = None
+        self._last_value: int | float | None = None
+
+    # When cell/gap changes, re-render current expression if any
+    def _refresh_if_rendered(self):
+        if self._last_tokens is not None:
+            self._render_from_cache()
+
+    def _tokens_to_panel_strip(self, tokens: list[str], order: str, cell_px: int, gap_px: int) -> Image.Image:
+        """"""Render the whole token stream to a single horizontal image strip.""""""
+        imgs: list[Image.Image] = []
+        i = 0
+        while i < len(tokens):
+            t = tokens[i]
+            if t.isdigit():  # number
+                n = int(t)
+                digits = int_to_base626(n)
+                for d in digits:
+                    imgs.append(digit_to_panel(d, order, cell_px=cell_px, draw_grid=True))
+                i += 1
+                continue
+
+            # operators / parens / equals
+            op = t
+            if op == ""*"" and op not in self.symbols:
+                mapped = map_op_to_glyph(op, self.symbols)
+                if mapped:
+                    op = mapped
+
+            glyph = self.symbols.get(op)
+            if not glyph:
+                raise ValueError(f""No glyph found for operator '{t}'. Add it to symbols JSON."")
+            # scale operator glyph to current Cell px
+            imgs.append(scale_panel_to_cell_px(glyph.image, cell_px=cell_px))
+            i += 1
+
+        return stitch_h(imgs, gap_px=gap_px)
+
+    def on_render(self):
+        expr_in = self.entry.get().strip()
+        if not expr_in:
+            messagebox.showerror(""Input needed"", ""Please enter an expression."")
+            return
+
+        try:
+            tokens = tokenize(expr_in)
+        except ValueError as e:
+            messagebox.showerror(""Parse error"", str(e))
+            return
+
+        # Evaluate
+        try:
+            value = eval_safe(expr_in)
+        except ValueError as e:
+            messagebox.showerror(""Evaluation error"", str(e))
+            return
+
+        # For panel rendering of the answer we prefer a non-negative integer.
+        if isinstance(value, float):
+            if not value.is_integer():
+                self.result_var.set(f""Result: {value} (non-integer; digits not rendered)"")
+            else:
+                value = int(value)
+
+        if isinstance(value, int) and value < 0:
+            self.result_var.set(f""Result: {value} (negative; add MINUS glyph handling if desired)"")
+        else:
+            self.result_var.set(f""Result: {value}"")
+
+        # cache state
+        self._last_tokens = tokens
+        self._last_value = value
+
+        self._render_from_cache()
+
+    def _render_from_cache(self):
+        assert self._last_tokens is not None
+        tokens = self._last_tokens
+        value = self._last_value
+
+        order = self.order_var.get()
+        cell_px = int(self.cell_var.get())
+        gap_px = int(self.gap_var.get())
+
+        # Render expression panels
+        try:
+            expr_img = self._tokens_to_panel_strip(tokens, order=order, cell_px=cell_px, gap_px=gap_px)
+        except Exception as e:
+            messagebox.showerror(""Render error (expression)"", str(e))
+            return
+
+        # Render ""= answer"" panels
+        ans_imgs: list[Image.Image] = []
+        # equals glyph
+        eq_glyph = self.symbols.get(""="")
+        if not eq_glyph:
+            messagebox.showerror(""Missing glyph"", ""No '=' glyph in symbols JSON."")
+            return
+        ans_imgs.append(scale_panel_to_cell_px(eq_glyph.image, cell_px=cell_px))
+
+        if isinstance(value, int) and value >= 0:
+            for d in int_to_base626(value):
+                ans_imgs.append(digit_to_panel(d, order, cell_px=cell_px, draw_grid=True))
+        # else: leave just '=' if non-integer or negative
+
+        ans_img = stitch_h(ans_imgs, gap_px=gap_px)
+
+        # Push to canvases
+        self.tk_expr = ImageTk.PhotoImage(expr_img)
+        self.canvas_expr.delete(""all"")
+        self.canvas_expr.config(scrollregion=(0, 0, expr_img.width, expr_img.height), height=expr_img.height)
+        self.canvas_expr.create_image(0, 0, anchor=""nw"", image=self.tk_expr)
+
+        self.tk_ans = ImageTk.PhotoImage(ans_img)
+        self.canvas_ans.delete(""all"")
+        self.canvas_ans.config(scrollregion=(0, 0, ans_img.width, ans_img.height), height=ans_img.height)
+        self.canvas_ans.create_image(0, 0, anchor=""nw"", image=self.tk_ans)
+
+
+def main():
+    app = Calculator()
+    app.mainloop()
+
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,export_0_625.py,export_0_625.py,.py,3305,2025-10-24T17:03:30Z,ce7305fb8f068652fde635be5af784034a853fa1e84351488278a55ecf6c423f,,"# save as: export_0_625.py
+# Usage examples (PowerShell):
+#   py -3.12 export_0_625.py --out ""out\\digits_0_625_row"" --order row --cell-px 20
+#   py -3.12 export_0_625.py --out ""out\\digits_0_625_rand"" --order random42 --no-grid
+
+from __future__ import annotations
+import argparse, csv, hashlib, json
+from pathlib import Path
+
+from base625_grid import (
+    GRID_CELLS,
+    encode_number_as_count,
+    encode_digit,
+    grid_to_image,
+)
+
+def sha256_of_pil(img) -> str:
+    # Save to bytes and hash for integrity / quick matching
+    import io
+    buf = io.BytesIO()
+    img.save(buf, format=""PNG"")
+    return hashlib.sha256(buf.getvalue()).hexdigest()
+
+def main():
+    ap = argparse.ArgumentParser(""Export 25×25 symbols for values 0..625 with a decode table."")
+    ap.add_argument(""--out"", required=True, help=""Output folder for images + decode table files."")
+    ap.add_argument(""--order"", choices=[""row"", ""snake"", ""random42""], default=""row"",
+                    help=""Cell fill order used for rendering."")
+    ap.add_argument(""--cell-px"", type=int, default=20, help=""Cell size in pixels (default 20)."")
+    ap.add_argument(""--no-grid"", action=""store_true"", help=""Hide gridlines in output images."")
+    ap.add_argument(""--mode"", choices=[""count"", ""digit""], default=""count"",
+                    help=""count = k black cells; digit = base-625 digit panel. (Default: count)"")
+    ap.add_argument(""--prefix"", default=""sym_"", help=""Filename prefix (default: sym_)"")
+    args = ap.parse_args()
+
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for k in range(0, GRID_CELLS + 1):  # 0..625 inclusive
+        if args.mode == ""count"":
+            grid = encode_number_as_count(k, order=args.order)
+        else:
+            # NOTE: base625_grid.encode_digit supports 0..624.
+            # If you want digit=625, first extend encode_digit() as discussed.
+            if k > 624:
+                # still export last one using count so you always get 626 files
+                grid = encode_number_as_count(k, order=args.order)
+            else:
+                grid = encode_digit(k, order=args.order)
+
+        img = grid_to_image(grid, cell_px=args.cell_px, draw_grid=not args.no_grid)
+        fname = f""{args.prefix}{k:03d}.png""
+        fpath = outdir / fname
+        img.save(fpath)
+
+        rows.append({
+            ""number"": k,
+            ""filename"": fname,
+            ""path"": str(fpath),
+            ""mode"": args.mode if k <= 624 else ""count"",
+            ""order"": args.order,
+            ""cell_px"": args.cell_px,
+            ""gridlines"": not args.no_grid,
+            ""black_cells"": int(grid.sum()),  # equals k in count-mode
+            ""sha256"": sha256_of_pil(img),
+        })
+
+    # Write JSON
+    with open(outdir / ""decode_table.json"", ""w"", encoding=""utf-8"") as f:
+        json.dump({""items"": rows}, f, indent=2)
+
+    # Write CSV (handy in Excel/Power BI)
+    with open(outdir / ""decode_table.csv"", ""w"", newline="""", encoding=""utf-8"") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+
+    print(f""Done. Wrote {len(rows)} images + decode_table.json/csv to {outdir}"")
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,gen_bit_dataset.py,gen_bit_dataset.py,.py,9252,2025-10-25T18:25:20Z,c39382530900e89f4e3eeb14652662845adc4386ef6fa3ccee5f538c85c9b477,,"# gen_bit_dataset.py
+#
+# Generate a 0/1 ""bit"" dataset for Base-626 panels + custom symbols.
+# - Digits: 0..625 as single-panel ""digits"" (0..624 via encode_digit; 625 via count-mode 625)
+# - Symbols: loaded from out/symbols/decode_table_symbols.json; PNG -> 25x25 bits by sampling cell centers
+#
+# Outputs in --out folder:
+#   X.npy, y.npy, dataset.npz, class_map.json
+#   (optional) dataset.csv, dataset.jsonl
+#
+# Examples:
+#   py -3.12 gen_bit_dataset.py --out data\\bits --include digits symbols --order row --copies 1 --noise-flip 0.0 --csv
+#   py -3.12 gen_bit_dataset.py --out data\\bits_aug --include digits --order random42 --copies 10 --noise-flip 0.01
+#
+# Requirements: numpy, pillow
+# Uses your base625_grid.py and symbols JSON from symbol_painter.py
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+from pathlib import Path
+from typing import List, Tuple, Dict
+
+import numpy as np
+from PIL import Image
+
+# from your project
+from base625_grid import (
+    GRID_N,
+    GRID_CELLS,
+    encode_digit,
+    encode_number_as_count,
+)
+
+DEFAULT_SYMBOLS_JSON = Path(""out"") / ""symbols"" / ""decode_table_symbols.json""
+
+
+def grid_bool_to_row(bits25x25: np.ndarray) -> np.ndarray:
+    """"""(25,25) bool -> (625,) uint8 in row-major order.""""""
+    return bits25x25.astype(np.uint8).reshape(-1)
+
+
+def make_digit_grid(d: int, order: str) -> np.ndarray:
+    """"""Return 25x25 bool grid for base-626 digit d.""""""
+    if 0 <= d <= 624:
+        g = encode_digit(d, order=order)
+    elif d == 625:
+        g = encode_number_as_count(625, order=order)
+    else:
+        raise ValueError(""digit out of range [0..625]"")
+    return g  # bool np.ndarray (25,25)
+
+
+def sample_png_to_grid25(png_path: Path) -> np.ndarray:
+    """"""
+    Reconstruct a 25x25 boolean grid from a PNG created by grid_to_image().
+    We infer cell_px from width and sample cell centers (robust to gridlines).
+    """"""
+    im = Image.open(png_path).convert(""RGB"")
+    w, h = im.width, im.height
+    # width = GRID_N * cell_px + 1 (same for height); infer cell_px
+    cell_px = round((w - 1) / GRID_N)
+    cell_px = max(1, cell_px)
+    grid = np.zeros((GRID_N, GRID_N), dtype=bool)
+    for r in range(GRID_N):
+        for c in range(GRID_N):
+            x = min(w - 1, c * cell_px + cell_px // 2)
+            y = min(h - 1, r * cell_px + cell_px // 2)
+            R, G, B = im.getpixel((x, y))
+            # black cell if dark (threshold halfway)
+            grid[r, c] = (R + G + B) < (255 * 3 / 2)
+    return grid
+
+
+def apply_bit_noise(vec625: np.ndarray, flip_prob: float, rng: random.Random) -> np.ndarray:
+    """"""Flip each bit with probability p (independent Bernoulli). vec625 is uint8 {0,1}.""""""
+    if flip_prob <= 0:
+        return vec625
+    mask = (np.array([rng.random() < flip_prob for _ in range(vec625.size)], dtype=bool))
+    out = vec625.copy()
+    out[mask] ^= 1  # flip bits
+    return out
+
+
+def build_class_map(symbols_items: List[Dict]) -> Tuple[Dict[int, Dict], Dict[str, int]]:
+    """"""
+    Assign class IDs:
+      0..625 -> digits
+      626..  -> symbols in a stable order (sort by 'symbol' then 'label' as fallback)
+    Returns (id_to_meta, symbol_to_id_for_ops)
+    """"""
+    id_to_meta: Dict[int, Dict] = {}
+    # digits
+    for d in range(0, GRID_CELLS + 1):
+        id_to_meta[d] = {""type"": ""DIGIT"", ""digit"": d}
+
+    # symbols
+    start = GRID_CELLS + 1  # 626
+    # sort for stability
+    norm = lambda s: (s or """").strip()
+    sym_sorted = sorted(symbols_items, key=lambda it: (norm(it.get(""symbol"")), norm(it.get(""label""))))
+
+    sym_to_id: Dict[str, int] = {}
+    cid = start
+    for it in sym_sorted:
+        sym = norm(it.get(""symbol""))
+        lab = norm(it.get(""label""))
+        if not sym:
+            continue
+        if sym in sym_to_id:
+            # skip duplicates of same printed symbol
+            continue
+        id_to_meta[cid] = {""type"": ""SYMBOL"", ""label"": lab or sym, ""symbol"": sym}
+        sym_to_id[sym] = cid
+        cid += 1
+
+    return id_to_meta, sym_to_id
+
+
+def main():
+    ap = argparse.ArgumentParser(description=""Generate 625-bit dataset for Base-626 digits and custom symbols."")
+    ap.add_argument(""--out"", required=True, help=""Output folder (created if missing)."")
+    ap.add_argument(""--include"", nargs=""+"", choices=[""digits"", ""symbols""], default=[""digits"", ""symbols""],
+                    help=""What to include in the dataset."")
+    ap.add_argument(""--order"", choices=[""row"", ""snake"", ""random42""], default=""row"",
+                    help=""Digit fill order (only affects digits 0..624; 625 is full grid)."")
+    ap.add_argument(""--copies"", type=int, default=1,
+                    help=""How many copies per class (digits and symbols). Use >1 with --noise-flip to augment."")
+    ap.add_argument(""--noise-flip"", type=float, default=0.0,
+                    help=""Bit flip probability per cell (e.g., 0.01 for 1%%). Applied independently to each copy."")
+    ap.add_argument(""--symbols-json"", type=str, default=str(DEFAULT_SYMBOLS_JSON),
+                    help=""Path to decode_table_symbols.json generated by symbol_painter.py."")
+    ap.add_argument(""--csv"", action=""store_true"", help=""Also export dataset.csv (large)."")
+    ap.add_argument(""--jsonl"", action=""store_true"", help=""Also export dataset.jsonl (large)."")
+    ap.add_argument(""--seed"", type=int, default=42, help=""Random seed for noise."")
+    args = ap.parse_args()
+
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rng = random.Random(args.seed)
+
+    # Load symbols JSON (may be empty if not including symbols)
+    symbols_items: List[Dict] = []
+    sym_json_path = Path(args.symbols_json)
+    if ""symbols"" in args.include:
+        if not sym_json_path.exists():
+            raise FileNotFoundError(f""Symbols JSON not found: {sym_json_path}"")
+        with open(sym_json_path, ""r"", encoding=""utf-8"") as f:
+            obj = json.load(f)
+            symbols_items = list(obj.get(""items"", []))
+
+    # Build class map (digits always in the map; symbols added if present)
+    id_to_meta, sym_to_id = build_class_map(symbols_items)
+
+    # Prepare lists
+    X_rows: List[np.ndarray] = []
+    y_rows: List[int] = []
+
+    # --- Digits 0..625 ---
+    if ""digits"" in args.include:
+        for d in range(0, GRID_CELLS + 1):
+            grid = make_digit_grid(d, order=args.order)              # bool (25,25)
+            base_vec = grid_bool_to_row(grid)                        # uint8 (625,)
+            for _ in range(args.copies):
+                vec = apply_bit_noise(base_vec, args.noise_flip, rng)
+                X_rows.append(vec)
+                y_rows.append(d)
+
+    # --- Symbols from JSON ---
+    if ""symbols"" in args.include:
+        # build list of unique symbols with an existing PNG path
+        seen_syms = set()
+        for item in symbols_items:
+            sym = (item.get(""symbol"") or """").strip()
+            p = Path(item.get(""path"", """"))
+            if not sym or not p.exists():
+                continue
+            if sym in seen_syms:
+                continue
+            seen_syms.add(sym)
+            class_id = sym_to_id.get(sym)
+            if class_id is None:
+                # shouldn't happen; skip if not in map
+                continue
+            # reconstruct 25x25 bool from the PNG
+            grid = sample_png_to_grid25(p)
+            base_vec = grid_bool_to_row(grid)
+            for _ in range(args.copies):
+                vec = apply_bit_noise(base_vec, args.noise_flip, rng)
+                X_rows.append(vec)
+                y_rows.append(class_id)
+
+    if not X_rows:
+        print(""No samples generated (check --include and symbols JSON)."")
+        return
+
+    X = np.stack(X_rows, axis=0).astype(np.uint8)  # (N,625)
+    y = np.array(y_rows, dtype=np.int64)           # (N,)
+
+    # Save npy/npz
+    np.save(outdir / ""X.npy"", X)
+    np.save(outdir / ""y.npy"", y)
+    np.savez_compressed(outdir / ""dataset.npz"", X=X, y=y)
+
+    # Save class map
+    with open(outdir / ""class_map.json"", ""w"", encoding=""utf-8"") as f:
+        json.dump(id_to_meta, f, indent=2, ensure_ascii=False)
+
+    # Optional CSV
+    if args.csv:
+        csv_path = outdir / ""dataset.csv""
+        with open(csv_path, ""w"", encoding=""utf-8"", newline="""") as f:
+            # header
+            cols = [""y""] + [f""x{i}"" for i in range(X.shape[1])]
+            f.write("","".join(cols) + ""\n"")
+            for i in range(X.shape[0]):
+                row = [str(int(y[i]))] + [str(int(b)) for b in X[i]]
+                f.write("","".join(row) + ""\n"")
+
+    # Optional JSONL
+    if args.jsonl:
+        jl_path = outdir / ""dataset.jsonl""
+        with open(jl_path, ""w"", encoding=""utf-8"") as f:
+            for i in range(X.shape[0]):
+                rec = {""y"": int(y[i]), ""x"": X[i].tolist()}
+                f.write(json.dumps(rec, ensure_ascii=False) + ""\n"")
+
+    print(f""Done. Wrote {X.shape[0]} samples to {outdir}"")
+    print(f""Shapes: X={X.shape}, y={y.shape}"")
+    print(f""Classes in class_map.json: {len(id_to_meta)} (digits 0..625 + symbols present)"")
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,get_current_app.py,get_current_app.py,.py,18177,2025-10-29T13:14:11Z,e581cdc349b23f5408527ee80e37a5a310b555e46ecbc0db8b4c9b26ef4aa2ef,,"#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import argparse
+import csv
+import hashlib
+import json
+import os
+import statistics
+import sys
+from datetime import datetime
+from collections import Counter, defaultdict
+
+# Optional deps
+try:
+    from PIL import Image  # type: ignore
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
+
+try:
+    import openpyxl  # type: ignore
+    OPENPYXL_AVAILABLE = True
+except Exception:
+    OPENPYXL_AVAILABLE = False
+
+# --------------------------- Defaults ----------------------------------------
+DEFAULT_INCLUDE_EXTS = {
+    "".py"", "".ipynb"",
+    "".csv"", "".tsv"", "".xlsx"", "".json"", "".jsonl"",
+    "".npz"", "".npy"",
+    "".png"", "".jpg"", "".jpeg"", "".gif"", "".webp"", "".svg""
+}
+
+DEFAULT_PRUNE_DIRS = {
+    "".venv"", ""venv"", ""env"", "".env"",
+    ""__pycache__"", "".ipynb_checkpoints"", "".pytest_cache"",
+    "".git"", "".hg"", "".svn"",
+    ""node_modules"", ""dist"", ""build"",
+    ""site-packages"", ""lib"", ""include"", ""scripts"",
+    ""egg-info"", ""eggs"",
+}
+DEFAULT_PRUNE_SUBSTR = {""-info"", ""dist-info"", "".egg-info""}
+
+MAX_SCRIPT_BYTES_DEFAULT = 2 * 1024 * 1024  # 2 MB
+MAX_JSON_BYTES = 1 * 1024 * 1024
+
+CSV_FIELDS = [
+    ""item_type"", ""classification"", ""relative_path"", ""name"", ""ext"",
+    ""size_bytes"", ""modified_utc"", ""sha256"", ""details"", ""content""
+]
+
+SCRIPT_EXTS = {
+    "".py"", "".ipynb"", "".r"", "".sql"", "".ps1"", "".psm1"",
+    "".sh"", "".bash"", "".bat"", "".cmd"", "".js"", "".ts"", "".jsx"", "".tsx"",
+    "".html"", "".htm"", "".css"", "".cpp"", "".cc"", "".c"", "".h"", "".hpp"",
+    "".cs"", "".java"", "".go"", "".rb"", "".php"", "".swift"", "".kt"", "".scala"", "".toml""
+}
+CONFIG_EXTS = {"".yml"", "".yaml"", "".ini"", "".cfg"", "".conf"", "".env"", "".toml""}
+DOC_EXTS    = {"".md"", "".rst"", "".txt"", "".adoc""}
+TABLE_EXTS  = {"".csv"", "".tsv""}
+EXCEL_EXTS  = {"".xlsx""}
+JSON_EXTS   = {"".json"", "".jsonl""}
+IMAGE_EXTS  = {"".png"", "".jpg"", "".jpeg"", "".gif"", "".bmp"", "".tiff"", "".webp"", "".ico"", "".svg""}
+
+# --------------------------- Helpers -----------------------------------------
+def iso_utc(ts: float) -> str:
+    return datetime.utcfromtimestamp(ts).isoformat(timespec=""seconds"") + ""Z""
+
+def file_sha256(path: str, limit_bytes: int | None = None) -> str:
+    h = hashlib.sha256()
+    with open(path, ""rb"") as f:
+        if limit_bytes is None:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""""):
+                h.update(chunk)
+        else:
+            remaining = limit_bytes
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                h.update(chunk)
+                remaining -= len(chunk)
+    return h.hexdigest()
+
+def classify_file(ext: str) -> str:
+    e = ext.lower()
+    if e in SCRIPT_EXTS: return ""script""
+    if e in TABLE_EXTS or e in EXCEL_EXTS: return ""table""
+    if e in JSON_EXTS: return ""json""
+    if e in IMAGE_EXTS: return ""image""
+    if e in CONFIG_EXTS: return ""config""
+    if e in DOC_EXTS: return ""doc""
+    return ""other""
+
+def summarize_csv_headers(path: str) -> str:
+    import csv as _csv
+    with open(path, ""r"", encoding=""utf-8"", errors=""replace"", newline="""") as f:
+        sample = f.read(4096); f.seek(0)
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=["","", ""\t"", "";"", ""|""])
+        except Exception:
+            dialect = _csv.excel
+        reader = _csv.reader(f, dialect)
+        try:
+            header = next(reader, [])
+        except Exception:
+            header = []
+    return ""Headers: "" + "", "".join([str(h) for h in header]) if header else ""No header row detected.""
+
+def summarize_xlsx_headers(path: str) -> str:
+    if not OPENPYXL_AVAILABLE:
+        return ""openpyxl not installed; cannot summarize .xlsx.""
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as e:
+        return f""Failed to open xlsx: {e!r}""
+    parts = []
+    try:
+        for ws in wb.worksheets:
+            header = []
+            for row in ws.iter_rows(min_row=1, max_row=5, values_only=True):
+                if row and any(cell is not None for cell in row):
+                    header = ["""" if c is None else str(c) for c in row]
+                    if any(h.strip() for h in header):
+                        break
+            parts.append(f""Sheet '{ws.title}': "" + ("", "".join(header) if header else ""(no non-empty first rows to infer headers)""))
+    finally:
+        wb.close()
+    return "" | "".join(parts) if parts else ""No sheets found.""
+
+def summarize_json(path: str) -> str:
+    try:
+        raw = open(path, ""rb"").read(MAX_JSON_BYTES)
+        text = raw.decode(""utf-8"", errors=""replace"")
+        data = json.loads(text)
+    except Exception as e:
+        return f""JSON parse failed or too large to parse safely: {e!r}""
+
+    def t(x):
+        if x is None: return ""null""
+        if isinstance(x, bool): return ""bool""
+        if isinstance(x, (int, float)): return ""number""
+        if isinstance(x, str): return ""string""
+        if isinstance(x, list): return f""array(len={len(x)})""
+        if isinstance(x, dict): return f""object(keys={len(x)})""
+        return type(x).__name__
+
+    if isinstance(data, dict):
+        keys = list(data.keys())
+        annotated = [f""{k}:{t(data[k])}"" for k in keys[:100]]
+        extra = """" if len(keys) <= 100 else f"" (+{len(keys)-100} more keys)""
+        return ""Top-level keys: "" + "", "".join(annotated) + extra
+    if isinstance(data, list):
+        desc = f""Top-level is array(len={len(data)})""
+        if data and isinstance(data[0], dict):
+            first_keys = list(data[0].keys())
+            desc += ""; first item keys: "" + "", "".join(first_keys[:50])
+            if len(first_keys) > 50:
+                desc += f"" (+{len(first_keys)-50} more)""
+        return desc
+    return f""Top-level is {t(data)}""
+
+def summarize_image(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if ext == "".svg"":
+        return ""Image (SVG vector).""
+    if not PIL_AVAILABLE:
+        return ""Image (Pillow not installed; dimensions unavailable).""
+    try:
+        with Image.open(path) as im:
+            return f""Image: format={im.format}, size={im.size[0]}x{im.size[1]}""
+    except Exception as e:
+        return f""Image metadata unavailable: {e!r}""
+
+def read_script_content(path: str, max_bytes: int) -> tuple[str, bool]:
+    raw = open(path, ""rb"").read(max_bytes + 1)
+    truncated = len(raw) > max_bytes
+    if truncated:
+        raw = raw[:max_bytes]
+    text = raw.decode(""utf-8"", errors=""replace"")
+    return text, truncated
+
+# --------------------------- Pruning helpers ---------------------------------
+def normalize_set(iterable):
+    out = set()
+    for s in iterable:
+        if not s: continue
+        s = s.strip()
+        if not s: continue
+        out.add(s.lower())
+    return out
+
+def should_prune_dir(dirname: str, prune_names: set[str], prune_substr: set[str]) -> bool:
+    d = dirname.lower()
+    if d in prune_names:
+        return True
+    return any(sub in d for sub in prune_substr)
+
+# ---------------------- Image collection collapse ----------------------------
+def aggregate_image_folder(dirpath: str, filenames: list[str], include_exts: set[str], sample_n: int):
+    """"""
+    Build an aggregate summary for image-heavy folders.
+    Returns (details_str, total_bytes, formats_counter, dims_stats_dict, samples)
+    """"""
+    image_files = [f for f in filenames if os.path.splitext(f)[1].lower() in IMAGE_EXTS and
+                   (not include_exts or os.path.splitext(f)[1].lower() in include_exts)]
+    sizes = []
+    total_bytes = 0
+    formats = Counter()
+    samples = sorted(image_files)[:sample_n]
+
+    for fname in image_files:
+        fpath = os.path.join(dirpath, fname)
+        try:
+            total_bytes += os.path.getsize(fpath)
+        except Exception:
+            pass
+        ext = os.path.splitext(fname)[1].lower()
+        if ext == "".svg"":
+            formats[""SVG""] += 1
+            # no raster size
+        elif PIL_AVAILABLE:
+            try:
+                with Image.open(fpath) as im:
+                    formats[im.format or ext.upper()] += 1
+                    sizes.append((im.size[0], im.size[1]))
+            except Exception:
+                formats[ext.upper().lstrip(""."")] += 1
+        else:
+            formats[ext.upper().lstrip(""."")] += 1
+
+    dims_info = {}
+    if sizes:
+        widths = [w for w, h in sizes]
+        heights = [h for w, h in sizes]
+        dims_info = {
+            ""min"": f""{min(widths)}x{min(heights)}"",
+            ""median"": f""{int(statistics.median(widths))}x{int(statistics.median(heights))}"",
+            ""max"": f""{max(widths)}x{max(heights)}"",
+        }
+
+    fmt_str = "", "".join(f""{k}:{v}"" for k, v in sorted(formats.items()))
+    parts = [
+        f""Image collection: count={len(image_files):,}"",
+        f""total_bytes={total_bytes:,}"",
+    ]
+    if fmt_str:
+        parts.append(f""formats={{ {fmt_str} }}"")
+    if dims_info:
+        parts.append(f""size(min/med/max)={dims_info['min']}/{dims_info['median']}/{dims_info['max']}"")
+    if samples:
+        parts.append(f""samples=[{', '.join(samples)}]"")
+    details = "" | "".join(parts)
+    return details, total_bytes, samples
+
+# --------------------------- Main walk ---------------------------------------
+def process_folder(root: str, out_csv: str, max_script_bytes: int,
+                   include_exts: set[str], prune_names: set[str], prune_substr: set[str],
+                   collapse_images: bool, collapse_threshold: int, collapse_force: set[str],
+                   sample_images: int):
+    root = os.path.abspath(root)
+    rows = []
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # prune dirs in-place so walk doesn't descend
+        dirnames[:] = [d for d in dirnames if not should_prune_dir(d, prune_names, prune_substr)]
+
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir == ""."": rel_dir = """"
+        rel_dir_unix = rel_dir.replace(""\\"", ""/"")
+        try:
+            mtime = os.stat(dirpath).st_mtime
+        except Exception:
+            mtime = 0.0
+
+        # Folder row
+        rows.append({
+            ""item_type"": ""folder"",
+            ""classification"": ""folder"",
+            ""relative_path"": rel_dir_unix,
+            ""name"": os.path.basename(dirpath) if rel_dir else os.path.basename(root),
+            ""ext"": """",
+            ""size_bytes"": 0,
+            ""modified_utc"": iso_utc(mtime) if mtime else """",
+            ""sha256"": """",
+            ""details"": f""Contains {len(dirnames)} subfolder(s), {len(filenames)} file(s)."",
+            ""content"": """"
+        })
+
+        # Collapse decision for image-heavy folders
+        image_files_here = [f for f in filenames if os.path.splitext(f)[1].lower() in IMAGE_EXTS]
+        force_collapse = rel_dir_unix.lower() in collapse_force
+        do_collapse = collapse_images and (force_collapse or len(image_files_here) >= collapse_threshold)
+
+        if do_collapse and image_files_here:
+            details, total_bytes, samples = aggregate_image_folder(dirpath, filenames, include_exts, sample_images)
+            rows.append({
+                ""item_type"": ""file"",                     # keep schema stable
+                ""classification"": ""image_collection"",    # <- key new value
+                ""relative_path"": rel_dir_unix + ""/*"",
+                ""name"": os.path.basename(dirpath) + "" (images)"",
+                ""ext"": """",
+                ""size_bytes"": total_bytes,
+                ""modified_utc"": iso_utc(mtime) if mtime else """",
+                ""sha256"": """",
+                ""details"": details,
+                ""content"": """"
+            })
+            # For collapsed folders: skip adding individual image rows
+            # Still include non-image files normally (e.g., decode_table.csv/json)
+            non_image_files = [f for f in filenames if os.path.splitext(f)[1].lower() not in IMAGE_EXTS]
+            filenames = non_image_files  # continue below with non-images only
+
+        # Normal per-file processing (non-images here if collapsed)
+        for fname in filenames:
+            ext = os.path.splitext(fname)[1].lower()
+            if include_exts and ext not in include_exts:
+                continue
+
+            fpath = os.path.join(dirpath, fname)
+            rel = os.path.relpath(fpath, root).replace(""\\"", ""/"")
+            classification = classify_file(ext)
+            try:
+                st = os.stat(fpath); size = st.st_size; mtime = st.st_mtime
+            except Exception:
+                size, mtime = 0, 0.0
+
+            sha = """"
+            details = """"
+            content = """"
+
+            if os.path.islink(fpath):
+                details = ""Symlink (target not inlined).""
+
+            if classification == ""script"":
+                try: sha = file_sha256(fpath)
+                except Exception: sha = """"
+                try:
+                    content, truncated = read_script_content(fpath, max_script_bytes)
+                    if truncated:
+                        details = f""Script content truncated to {max_script_bytes} bytes.""
+                except Exception as e:
+                    details = f""Failed to read script: {e!r}""
+
+            elif classification == ""table"":
+                try: sha = file_sha256(fpath)
+                except Exception: sha = """"
+                if ext in TABLE_EXTS:
+                    try: details = summarize_csv_headers(fpath)
+                    except Exception as e: details = f""Failed to summarize CSV/TSV: {e!r}""
+                elif ext in EXCEL_EXTS:
+                    details = summarize_xlsx_headers(fpath)
+
+            elif classification == ""json"":
+                try: sha = file_sha256(fpath)
+                except Exception: sha = """"
+                details = summarize_json(fpath)
+
+            elif classification == ""image"":
+                try: sha = file_sha256(fpath)
+                except Exception: sha = """"
+                details = summarize_image(fpath)
+
+            else:
+                if size <= 5 * 1024 * 1024:
+                    try: sha = file_sha256(fpath)
+                    except Exception: sha = """"
+                if classification == ""config"":
+                    details = ""Configuration file.""
+                elif classification == ""doc"":
+                    details = ""Documentation/notes.""
+
+            rows.append({
+                ""item_type"": ""file"",
+                ""classification"": classification,
+                ""relative_path"": rel,
+                ""name"": fname,
+                ""ext"": ext,
+                ""size_bytes"": size,
+                ""modified_utc"": iso_utc(mtime) if mtime else """",
+                ""sha256"": sha,
+                ""details"": details,
+                ""content"": content
+            })
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_csv)) or ""."", exist_ok=True)
+    with open(out_csv, ""w"", encoding=""utf-8"", newline="""") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+def main():
+    p = argparse.ArgumentParser(description=""Produce an application summary CSV for an LLM (project files only)."")
+    p.add_argument(""--root"", required=True, help=""Root folder to scan."")
+    p.add_argument(""--out"", default=""application_summary.csv"", help=""Output CSV path."")
+    p.add_argument(""--max-script-bytes"", type=int, default=MAX_SCRIPT_BYTES_DEFAULT,
+                   help=f""Max bytes of script content per file (default {MAX_SCRIPT_BYTES_DEFAULT})."")
+    p.add_argument(""--include-ext"", default="","".join(sorted(DEFAULT_INCLUDE_EXTS)),
+                   help=""Comma-separated list of file extensions to include (e.g. .py,.csv,.json)."")
+    p.add_argument(""--prune"", default="";"".join(sorted(DEFAULT_PRUNE_DIRS)),
+                   help=""Semicolon-separated list of directory names to prune."")
+    p.add_argument(""--prune-substr"", default="";"".join(sorted(DEFAULT_PRUNE_SUBSTR)),
+                   help=""Semicolon-separated list of substrings; directories containing any will be pruned."")
+
+    # NEW: image-collapse controls
+    p.add_argument(""--collapse-images"", action=""store_true"", default=True,
+                   help=""Collapse image-heavy folders into a single summary row (default: on)."")
+    p.add_argument(""--collapse-threshold"", type=int, default=50,
+                   help=""If a folder has >= this many images, collapse it (default 50)."")
+    p.add_argument(""--collapse-force"", default=""out/symbols;out/digits_0_625_row"",
+                   help=""Semicolon-separated relative paths to ALWAYS collapse (case-insensitive)."")
+    p.add_argument(""--sample-images"", type=int, default=5,
+                   help=""Number of sample filenames to list for collapsed folders (default 5)."")
+
+    args = p.parse_args()
+
+    include_exts = normalize_set(ext.strip() if ext.startswith(""."") else f"".{ext.strip()}""
+                                 for ext in args.include_ext.split("",""))
+    prune_names = normalize_set(args.prune.split("";""))
+    prune_substr = normalize_set(args.prune_substr.split("";""))
+    collapse_force = normalize_set(args.collapse_force.split("";""))
+
+    effective_max_script_bytes = max(1, int(args.max_script_bytes))
+    if not os.path.isdir(args.root):
+        print(f""ERROR: Root not found or not a directory: {args.root}"", file=sys.stderr)
+        sys.exit(1)
+
+    process_folder(
+        root=args.root,
+        out_csv=args.out,
+        max_script_bytes=effective_max_script_bytes,
+        include_exts=include_exts,
+        prune_names=prune_names,
+        prune_substr=prune_substr,
+        collapse_images=bool(args.collapse_images),
+        collapse_threshold=max(1, int(args.collapse_threshold)),
+        collapse_force=collapse_force,
+        sample_images=max(0, int(args.sample_images)),
+    )
+    print(f""✅ Application summary written to: {args.out}"")
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,number_viewer.py,number_viewer.py,.py,3167,2025-10-24T17:53:56Z,669dbbabb8c804e9f0a6553521afb1a0428a20aa3bacda83f610211d8cc2bef2,,"# number_viewer.py
+#
+# Simple GUI: enter a number, render its Base-626 digit panels as 25×25 grids.
+#
+# Requirements: pillow, numpy (already installed for your project).
+#
+# Usage:
+#   py -3.12 number_viewer.py
+#
+# In the GUI:
+#   • Enter a number (0, 1, 42, 123456…)
+#   • Click ""Render""
+#   • The Base-626 digit panels appear side by side.
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+from pathlib import Path
+from PIL import Image, ImageTk
+
+import numpy as np
+from base625_grid import encode_digit, grid_to_image, int_to_base625, GRID_CELLS
+
+CELL_PX = 20   # pixel size for each cell
+ORDER = ""row""  # fill order: row | snake | random42
+
+class NumberViewer(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(""Base-626 Number Viewer"")
+        self.geometry(""800x400"")
+
+        # Top entry + button
+        top = ttk.Frame(self, padding=8)
+        top.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(top, text=""Enter number:"").pack(side=tk.LEFT)
+        self.entry = ttk.Entry(top, width=20)
+        self.entry.pack(side=tk.LEFT, padx=(4, 12))
+        self.entry.insert(0, ""42"")
+
+        ttk.Button(top, text=""Render"", command=self.on_render).pack(side=tk.LEFT, padx=4)
+
+        # Canvas for image strip
+        self.canvas = tk.Canvas(self, bg=""#ddd"")
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        self.tk_img = None  # keep reference
+
+    def on_render(self):
+        text = self.entry.get().strip()
+        if not text.isdigit():
+            messagebox.showerror(""Invalid input"", ""Please enter a non-negative integer."")
+            return
+
+        val = int(text)
+        if val < 0:
+            messagebox.showerror(""Invalid input"", ""Only non-negative integers supported."")
+            return
+
+        # Convert to base-626 digits
+        digits = self.int_to_base626(val)
+
+        # Render panels
+        panels = [encode_digit(d, order=ORDER) if d <= 624 else encode_digit(624, order=ORDER) for d in digits]
+        rendered = [grid_to_image(p, cell_px=CELL_PX, draw_grid=True) for p in panels]
+
+        # Stitch horizontally
+        total_w = sum(im.width for im in rendered) + 8 * (len(rendered) - 1)
+        total_h = max(im.height for im in rendered)
+        out = Image.new(""RGB"", (total_w, total_h), (240, 240, 240))
+        x = 0
+        for im in rendered:
+            out.paste(im, (x, 0))
+            x += im.width + 8
+
+        # Show in canvas
+        self.tk_img = ImageTk.PhotoImage(out)
+        self.canvas.delete(""all"")
+        self.canvas.config(scrollregion=(0, 0, out.width, out.height))
+        self.canvas.create_image(0, 0, anchor=""nw"", image=self.tk_img)
+
+    def int_to_base626(self, n: int):
+        """"""Convert int -> list of base-626 digits (0..625).""""""
+        if n == 0:
+            return [0]
+        digits = []
+        base = GRID_CELLS + 1  # 626
+        while n > 0:
+            n, r = divmod(n, base)
+            digits.append(r)
+        return list(reversed(digits))
+
+
+def main():
+    app = NumberViewer()
+    app.mainloop()
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,symbol_painter.py,symbol_painter.py,.py,13452,2025-10-24T17:46:48Z,0847aafa7393306afce7e1694ef215a16f0624bd85279eb34a695003df0d36a6,,"# -*- coding: utf-8 -*-
+# symbol_painter.py
+#
+# A 25×25 boolean grid GUI to hand-design math symbols for your Base-625 canvas.
+# - Click/drag to toggle cells (Left = draw, Right = erase; or click to toggle).
+# - ""Label (ASCII)"" is a machine-safe label (e.g., PLUS, MINUS, SQRT). Used for filenames.
+# - ""Symbol (pretty)"" is the human symbol (e.g., +, −, √). Stored in decode table.
+# - ""Center pattern"" auto-centers the drawn pixels inside the 25×25 box.
+# - ""Save"" writes PNG to out/symbols and upserts a decode table JSON/CSV.
+#
+# Requirements: Python 3.12+, pillow, numpy (pip install pillow numpy)
+#
+# Usage:
+#   py -3.12 symbol_painter.py
+#
+# Files created:
+#   out/symbols/<label>.png
+#   out/symbols/decode_table_symbols.json   (UTF-8 with real Unicode glyphs)
+#   out/symbols/decode_table_symbols.csv
+
+from __future__ import annotations
+
+import csv
+import hashlib
+import io
+import json
+import re
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Tuple
+
+import numpy as np
+from PIL import Image, ImageDraw
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+GRID_N = 25
+DEFAULT_CELL_PX = 20
+
+OUT_DIR = Path(""out"") / ""symbols""
+DECODE_JSON = OUT_DIR / ""decode_table_symbols.json""
+DECODE_CSV = OUT_DIR / ""decode_table_symbols.csv""
+
+
+def sanitize_label(label: str) -> str:
+    """"""Safe filename from label (keep letters, digits, _-).""""""
+    label = (label or """").strip()
+    if not label:
+        return """"
+    label = label.replace("" "", ""_"")
+    label = re.sub(r""[^A-Za-z0-9_\-]+"", """", label)
+    return label or """"
+
+
+def grid_to_image(grid: np.ndarray, cell_px: int = DEFAULT_CELL_PX, draw_grid: bool = True) -> Image.Image:
+    n = grid.shape[0]
+    W = n * cell_px
+    H = n * cell_px
+    img = Image.new(""RGB"", (W + 1, H + 1), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # paint cells
+    for r in range(n):
+        for c in range(n):
+            x0 = c * cell_px
+            y0 = r * cell_px
+            x1 = x0 + cell_px
+            y1 = y0 + cell_px
+            fill = (0, 0, 0) if grid[r, c] else (255, 255, 255)
+            draw.rectangle([x0, y0, x1, y1], fill=fill)
+
+    # gridlines
+    if draw_grid:
+        for c in range(n + 1):
+            x = c * cell_px
+            draw.line([(x, 0), (x, H)], fill=(0, 0, 0), width=1)
+        for r in range(n + 1):
+            y = r * cell_px
+            draw.line([(0, y), (W, y)], fill=(0, 0, 0), width=1)
+
+    return img
+
+
+def sha256_png(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format=""PNG"")
+    return hashlib.sha256(buf.getvalue()).hexdigest()
+
+
+def center_pattern(grid: np.ndarray) -> np.ndarray:
+    """"""Return a new 25×25 grid with the drawn pixels centered.""""""
+    n = grid.shape[0]
+    rows = np.any(grid, axis=1)
+    cols = np.any(grid, axis=0)
+    if not rows.any() or not cols.any():
+        return grid.copy()  # nothing drawn
+
+    r0, r1 = np.where(rows)[0][0], np.where(rows)[0][-1]
+    c0, c1 = np.where(cols)[0][0], np.where(cols)[0][-1]
+    h = r1 - r0 + 1
+    w = c1 - c0 + 1
+
+    cropped = grid[r0:r1+1, c0:c1+1]
+    out = np.zeros((n, n), dtype=bool)
+
+    r_start = (n - h) // 2
+    c_start = (n - w) // 2
+    out[r_start:r_start+h, c_start:c_start+w] = cropped
+    return out
+
+
+@dataclass
+class AppState:
+    grid: np.ndarray
+    drawing: bool = False
+    draw_value: bool = True  # what to paint while dragging (True=black, False=white)
+
+
+class SymbolPainter(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(""Symbol Painter — 25×25"")
+        self.state = AppState(grid=np.zeros((GRID_N, GRID_N), dtype=bool))
+        self.cell_px_var = tk.IntVar(value=DEFAULT_CELL_PX)
+        self.gridlines_var = tk.BooleanVar(value=True)
+        self.autocenter_var = tk.BooleanVar(value=True)
+
+        self._build_ui()
+        self._redraw()
+
+    # ---------- UI ----------
+    def _build_ui(self):
+        # Top controls (labels & actions)
+        top = ttk.Frame(self, padding=8)
+        top.pack(side=tk.TOP, fill=tk.X)
+
+        # Label (ASCII)
+        ttk.Label(top, text=""Label (ASCII):"").pack(side=tk.LEFT)
+        self.label_entry = ttk.Entry(top, width=16)
+        self.label_entry.pack(side=tk.LEFT, padx=(4, 12))
+        self.label_entry.insert(0, """")  # e.g., PLUS, MINUS, SQRT
+
+        # Symbol (pretty)
+        ttk.Label(top, text=""Symbol (pretty):"").pack(side=tk.LEFT)
+        self.symbol_entry = ttk.Entry(top, width=10)
+        self.symbol_entry.pack(side=tk.LEFT, padx=(4, 12))
+        self.symbol_entry.insert(0, """")  # e.g., +, −, √
+
+        ttk.Button(top, text=""Save"", command=self.on_save).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text=""Clear"", command=self.on_clear).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text=""Invert"", command=self.on_invert).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text=""Center pattern"", command=self.on_center_once).pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(top, text=""Cell px"").pack(side=tk.LEFT, padx=(12, 2))
+        self.cell_spin = ttk.Spinbox(top, from_=8, to=64, textvariable=self.cell_px_var, width=5, command=self._redraw)
+        self.cell_spin.pack(side=tk.LEFT)
+
+        ttk.Checkbutton(top, text=""Gridlines"", variable=self.gridlines_var, command=self._redraw).pack(side=tk.LEFT, padx=8)
+        ttk.Checkbutton(top, text=""Auto-center on save"", variable=self.autocenter_var).pack(side=tk.LEFT, padx=8)
+
+        # Canvas
+        self.canvas = tk.Canvas(self, bg=""#ffffff"")
+        self.canvas.pack(side=tk.TOP, padx=8, pady=8)
+
+        self.canvas.bind(""<Button-1>"", self.on_click_left)
+        self.canvas.bind(""<B1-Motion>"", self.on_drag_left)
+        self.canvas.bind(""<ButtonRelease-1>"", self.on_release)
+        self.canvas.bind(""<Button-3>"", self.on_click_right)
+        self.canvas.bind(""<B3-Motion>"", self.on_drag_right)
+        self.canvas.bind(""<Configure>"", lambda e: self._redraw())
+
+        # Status
+        self.status = tk.StringVar(value=""Left-drag = draw • Right-drag = erase • Click toggles"")
+        ttk.Label(self, textvariable=self.status, relief=tk.SUNKEN, anchor=""w"", padding=6).pack(side=tk.BOTTOM, fill=tk.X)
+
+    # ---------- Grid helpers ----------
+    def _grid_dims(self) -> Tuple[int, int]:
+        n = GRID_N
+        px = self.cell_px_var.get()
+        width = n * px + 1
+        height = n * px + 1
+        return width, height
+
+    def _cell_at(self, x: int, y: int) -> Tuple[int, int] | None:
+        px = self.cell_px_var.get()
+        r = y // px
+        c = x // px
+        if 0 <= r < GRID_N and 0 <= c < GRID_N:
+            return r, c
+        return None
+
+    def _redraw(self):
+        W, H = self._grid_dims()
+        self.canvas.config(width=W, height=H)
+        self.canvas.delete(""all"")
+
+        px = self.cell_px_var.get()
+        g = self.state.grid
+
+        # Draw cells
+        for r in range(GRID_N):
+            for c in range(GRID_N):
+                x0 = c * px
+                y0 = r * px
+                x1 = x0 + px
+                y1 = y0 + px
+                fill = ""#000000"" if g[r, c] else ""#ffffff""
+                self.canvas.create_rectangle(x0, y0, x1, y1, outline="""", fill=fill)
+
+        # Gridlines
+        if self.gridlines_var.get():
+            for c in range(GRID_N + 1):
+                x = c * px
+                self.canvas.create_line(x, 0, x, H, fill=""#000000"")
+            for r in range(GRID_N + 1):
+                y = r * px
+                self.canvas.create_line(0, y, W, y, fill=""#000000"")
+
+        blacks = int(self.state.grid.sum())
+        self.status.set(f""Cells filled: {blacks} • Left-drag=draw • Right-drag=erase • Click toggles"")
+
+    # ---------- Events ----------
+    def on_click_left(self, event):
+        cell = self._cell_at(event.x, event.y)
+        if not cell:
+            return
+        r, c = cell
+        # Toggle on click, but set drag mode to draw=True
+        self.state.grid[r, c] = not self.state.grid[r, c]
+        self.state.drawing = True
+        self.state.draw_value = True
+        self._redraw()
+
+    def on_drag_left(self, event):
+        if not self.state.drawing:
+            return
+        cell = self._cell_at(event.x, event.y)
+        if not cell:
+            return
+        r, c = cell
+        self.state.grid[r, c] = True
+        self._redraw()
+
+    def on_click_right(self, event):
+        cell = self._cell_at(event.x, event.y)
+        if not cell:
+            return
+        r, c = cell
+        self.state.grid[r, c] = False
+        self.state.drawing = True
+        self.state.draw_value = False
+        self._redraw()
+
+    def on_drag_right(self, event):
+        if not self.state.drawing:
+            return
+        cell = self._cell_at(event.x, event.y)
+        if not cell:
+            return
+        r, c = cell
+        self.state.grid[r, c] = False
+        self._redraw()
+
+    def on_release(self, _event):
+        self.state.drawing = False
+
+    # ---------- Buttons ----------
+    def on_clear(self):
+        self.state.grid[:, :] = False
+        self._redraw()
+
+    def on_invert(self):
+        self.state.grid[:, :] = ~self.state.grid
+        self._redraw()
+
+    def on_center_once(self):
+        self.state.grid = center_pattern(self.state.grid)
+        self._redraw()
+
+    def on_save(self):
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Grab fields
+        label_raw = (self.label_entry.get() or """").strip()
+        symbol_raw = (self.symbol_entry.get() or """").strip()
+
+        # Fallbacks
+        # - If label missing but symbol present, derive a label from symbol name/codepoint
+        if not label_raw and symbol_raw:
+            # Try to make a reasonable label from symbol (e.g., √ -> SQRT)
+            fallback = {
+                ""+"": ""PLUS"", ""-"": ""MINUS"", ""×"": ""TIMES"", ""*"": ""TIMES"", ""·"": ""DOT"",
+                ""/"": ""DIV"", ""÷"": ""DIV"", ""="": ""EQUALS"", ""^"": ""POW"",
+                ""("": ""LPAREN"", "")"": ""RPAREN"", ""."": ""DOT"", ""√"": ""SQRT"", ""!"": ""FACTORIAL""
+            }.get(symbol_raw, f""SYM_{ord(symbol_raw):04X}"")
+            label_raw = fallback
+
+        # If symbol is missing, default it to label_raw (so CSV/JSON always has something)
+        if not symbol_raw:
+            symbol_raw = label_raw
+
+        # Filename-safe label
+        label = sanitize_label(label_raw)
+        if not label:
+            ts = time.strftime(""%Y%m%d_%H%M%S"")
+            label = f""sym_{ts}""
+
+        grid = self.state.grid
+        if self.autocenter_var.get():
+            grid = center_pattern(grid)
+
+        img = grid_to_image(grid, cell_px=self.cell_px_var.get(), draw_grid=self.gridlines_var.get())
+        sha = sha256_png(img)
+
+        fpath = OUT_DIR / f""{label}.png""
+        # If file exists, confirm overwrite
+        if fpath.exists():
+            ans = messagebox.askyesno(""Overwrite?"", f""'{fpath.name}' exists. Overwrite and update decode table?"")
+            if not ans:
+                return
+        img.save(fpath)
+
+        # Save / update decode tables
+        record = {
+            ""label"": label_raw,               # machine-ish name as entered
+            ""symbol"": symbol_raw,             # pretty glyph
+            ""filename"": fpath.name,
+            ""path"": str(fpath),
+            ""sha256"": sha,
+            ""black_cells"": int(grid.sum()),
+            ""cell_px"": int(self.cell_px_var.get()),
+            ""gridlines"": bool(self.gridlines_var.get()),
+            ""autocentered"": bool(self.autocenter_var.get()),
+        }
+        self._upsert_decode_tables(record)
+        self.status.set(f""Saved {fpath.name} • cells={record['black_cells']} • sha256={sha[:12]}…"")
+
+    # ---------- Decode table I/O ----------
+    def _upsert_decode_tables(self, record: dict):
+        # JSON
+        items = []
+        if DECODE_JSON.exists():
+            try:
+                with open(DECODE_JSON, ""r"", encoding=""utf-8"") as f:
+                    obj = json.load(f)
+                    items = obj.get(""items"", [])
+            except Exception:
+                items = []
+
+        # replace by filename OR label (case-insensitive)
+        def keyer(x):
+            return (x.get(""filename"", """").lower(), (x.get(""label"") or """").strip().lower())
+
+        new_key = keyer(record)
+        filtered = [r for r in items if keyer(r) != new_key]
+        filtered.append(record)
+        with open(DECODE_JSON, ""w"", encoding=""utf-8"") as f:
+            # ensure_ascii=False so √, ≤, ≥, ∑ etc. are written as real characters
+            json.dump({""items"": filtered}, f, indent=2, ensure_ascii=False)
+
+        # CSV
+        fieldnames = [""label"", ""symbol"", ""filename"", ""path"", ""sha256"", ""black_cells"", ""cell_px"", ""gridlines"", ""autocentered""]
+        rows = filtered
+        with open(DECODE_CSV, ""w"", newline="""", encoding=""utf-8"") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k, """") for k in fieldnames})
+
+
+def main():
+    # Guarantee output dir exists for first run
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    app = SymbolPainter()
+    app.mainloop()
+
+
+if __name__ == ""__main__"":
+    main()
+"
+file,script,validate_bits_dataset.py,validate_bits_dataset.py,.py,12185,2025-10-25T18:31:31Z,be62823301191d0835125a838151989267f46bd5e24566b2663bf0194411cf7a,,"# validate_bits_dataset.py
+# Validate a 625-bit Base-626 dataset produced by gen_bit_dataset.py
+#
+# Checks:
+#  - Shapes/dtypes/value ranges
+#  - Class coverage & balance
+#  - Duplicate bit-vectors across different labels (collisions)
+#  - Digit self-consistency: sum(bits)==digit for classes 0..625
+#  - (Optional) Symbol parity: PNG -> 25x25 -> bits equals dataset bits
+#  - Make small montages for quick human scan
+#  - (Optional) quick MLP sanity accuracy
+#
+# Usage examples:
+#   py -3.12 -m pip install numpy pillow scikit-learn
+#   py -3.12 validate_bits_dataset.py --data data\\bits --symbols out\\symbols\\decode_table_symbols.json --montages
+#   py -3.12 validate_bits_dataset.py --data data\\bits --quick-train
+
+from __future__ import annotations
+
+import argparse, json, hashlib
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+# Optional quick-train
+try:
+    from sklearn.model_selection import train_test_split
+    from sklearn.neural_network import MLPClassifier
+    HAVE_SK = True
+except Exception:
+    HAVE_SK = False
+
+GRID_N = 25
+
+def boolvec_to_grid(bits: np.ndarray) -> np.ndarray:
+    """"""(625,) uint8 -> (25,25) bool (row-major).""""""
+    g = bits.reshape(GRID_N, GRID_N).astype(bool)
+    return g
+
+def grid_to_image(grid: np.ndarray, cell_px: int = 12, draw_grid: bool = False) -> Image.Image:
+    n = grid.shape[0]
+    W = n * cell_px
+    H = n * cell_px
+    img = Image.new(""RGB"", (W + 1, H + 1), (255, 255, 255))
+    drw = ImageDraw.Draw(img)
+    for r in range(n):
+        for c in range(n):
+            x0 = c * cell_px
+            y0 = r * cell_px
+            x1 = x0 + cell_px
+            y1 = y0 + cell_px
+            fill = (0, 0, 0) if grid[r, c] else (255, 255, 255)
+            drw.rectangle([x0, y0, x1, y1], fill=fill)
+    if draw_grid:
+        for c in range(n + 1):
+            x = c * cell_px
+            drw.line([(x, 0), (x, H)], fill=(0,0,0), width=1)
+        for r in range(n + 1):
+            y = r * cell_px
+            drw.line([(0, y), (W, y)], fill=(0,0,0), width=1)
+    return img
+
+def sample_png_to_grid25(png_path: Path) -> np.ndarray:
+    """"""Rebuild (25,25) bool grid from a PNG generated by the project renderer.""""""
+    im = Image.open(png_path).convert(""RGB"")
+    w, h = im.width, im.height
+    cell_px = max(1, round((w - 1) / GRID_N))
+    g = np.zeros((GRID_N, GRID_N), dtype=bool)
+    for r in range(GRID_N):
+        for c in range(GRID_N):
+            x = min(w - 1, c * cell_px + cell_px // 2)
+            y = min(h - 1, r * cell_px + cell_px // 2)
+            R, G, B = im.getpixel((x, y))
+            g[r, c] = (R + G + B) < (255 * 3 / 2)
+    return g
+
+def sha256_bits(bits: np.ndarray) -> str:
+    return hashlib.sha256(bits.astype(np.uint8).tobytes()).hexdigest()
+
+def main():
+    ap = argparse.ArgumentParser(description=""Validate 625-bit Base-626 dataset"")
+    ap.add_argument(""--data"", required=True, help=""Folder containing X.npy, y.npy, class_map.json"")
+    ap.add_argument(""--symbols"", default="""", help=""(Optional) symbols decode_table_symbols.json for parity check"")
+    ap.add_argument(""--montages"", action=""store_true"", help=""Write small class montages to validation_output/montages"")
+    ap.add_argument(""--quick-train"", action=""store_true"", help=""Train a tiny MLP to sanity-check separability"")
+    ap.add_argument(""--montage-classes"", type=int, default=12, help=""How many classes to montage"")
+    ap.add_argument(""--montage-samples"", type=int, default=16, help=""Samples per class in montage"")
+    args = ap.parse_args()
+
+    data_dir = Path(args.data)
+    out_dir = data_dir / ""validation_output""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # -------- Load core files --------
+    X_path, Y_path, MAP_path = data_dir/""X.npy"", data_dir/""y.npy"", data_dir/""class_map.json""
+    assert X_path.exists() and Y_path.exists() and MAP_path.exists(), ""Missing X.npy / y.npy / class_map.json""
+
+    X = np.load(X_path)  # (N,625) uint8
+    y = np.load(Y_path)  # (N,)
+    with open(MAP_path, ""r"", encoding=""utf-8"") as f:
+        class_map: Dict[str, Dict] = json.load(f)
+
+    report_lines: List[str] = []
+    def log(line: str):
+        print(line)
+        report_lines.append(line)
+
+    log(f""Loaded: X={X.shape} dtype={X.dtype}, y={y.shape} dtype={y.dtype}, classes in map={len(class_map)}"")
+
+    # -------- Schema checks --------
+    ok_vals = np.isin(X, [0,1]).all()
+    log(f""Values in X are only 0/1: {ok_vals}"")
+    if not ok_vals:
+        bad = int(np.sum(~np.isin(X, [0,1])))
+        log(f""  WARNING: found {bad} non-binary entries in X"")
+
+    assert X.ndim == 2 and X.shape[1] == 625, ""X must be (N,625)""
+    assert y.ndim == 1 and y.shape[0] == X.shape[0], ""y length must equal N""
+
+    # Coverage
+    labels_present = sorted(set(int(v) for v in y.tolist()))
+    log(f""Labels present: {len(labels_present)} unique"")
+    # Verify all labels exist in map
+    missing_in_map = [cid for cid in labels_present if str(cid) not in class_map]
+    log(f""Labels missing from class_map.json: {missing_in_map}"" if missing_in_map else ""All labels found in class_map.json"")
+
+    # -------- Class balance --------
+    counts = np.bincount(y, minlength=max(labels_present)+1)
+    present_counts = {cid:int(counts[cid]) for cid in labels_present}
+    min_c = min(present_counts.values())
+    max_c = max(present_counts.values())
+    log(f""Per-class count: min={min_c}, max={max_c}, mean={np.mean(list(present_counts.values())):.2f}"")
+    # Save a small CSV of counts
+    with open(out_dir/""class_counts.csv"",""w"",encoding=""utf-8"") as f:
+        f.write(""class_id,type,label_or_digit,count\n"")
+        for cid in labels_present:
+            meta = class_map.get(str(cid), {})
+            if meta.get(""type"") == ""DIGIT"":
+                lab = f""DIGIT_{meta.get('digit')}""
+            else:
+                lab = meta.get(""label"", meta.get(""symbol"",""?""))
+            f.write(f""{cid},{meta.get('type','?')},{lab},{present_counts[cid]}\n"")
+
+    # -------- Bit-label collisions --------
+    # Hash each row and see if any hash maps to multiple labels
+    hashes = {}
+    collisions = []
+    for i in range(X.shape[0]):
+        h = sha256_bits(X[i])
+        lbl = int(y[i])
+        if h not in hashes:
+            hashes[h] = lbl
+        elif hashes[h] != lbl:
+            collisions.append((i, lbl, hashes[h]))
+    log(f""Bit collisions (same bits, different labels): {len(collisions)}"")
+    if collisions:
+        with open(out_dir/""collisions.txt"",""w"") as f:
+            for i, lbl, prev in collisions:
+                f.write(f""row={i} label={lbl} prev_label_for_same_bits={prev}\n"")
+
+    # -------- Digit self-consistency --------
+    # For each digit class 0..625 that appears, check average bit-sum equals the digit
+    digit_ids = [cid for cid in labels_present if cid <= 625]
+    inconsistent = []
+    for d in digit_ids:
+        idx = np.where(y == d)[0]
+        # take up to 100 samples for speed
+        idx = idx[: min(100, len(idx))]
+        if idx.size == 0:
+            continue
+        sums = X[idx].sum(axis=1)  # (k,)
+        mean_sum = float(sums.mean())
+        if not np.isclose(mean_sum, d, atol=0.1):
+            inconsistent.append((d, mean_sum))
+    log(f""Digit self-consistency issues: {len(inconsistent)}"")
+    if inconsistent:
+        with open(out_dir/""digit_inconsistency.txt"",""w"") as f:
+            for d, m in inconsistent:
+                f.write(f""class {d}: mean bit-sum {m:.3f} vs expected {d}\n"")
+
+    # -------- Symbol parity (optional) --------
+    if args.symbols:
+        sym_json = Path(args.symbols)
+        if sym_json.exists():
+            with open(sym_json, ""r"", encoding=""utf-8"") as f:
+                sym_obj = json.load(f)
+            # Build map symbol -> png path
+            sym_to_png = {}
+            for it in sym_obj.get(""items"", []):
+                sym = (it.get(""symbol"") or """").strip()
+                pth = Path(it.get(""path"",""""))
+                if sym and pth.exists():
+                    sym_to_png[sym] = pth
+            # Compare first sample per symbol class (if present)
+            symbol_mismatches = []
+            for cid_str, meta in class_map.items():
+                cid = int(cid_str)
+                if meta.get(""type"") != ""SYMBOL"":
+                    continue
+                sym = (meta.get(""symbol"") or """").strip()
+                png = sym_to_png.get(sym)
+                if png is None:
+                    continue
+                # find one row with label cid
+                idx = np.where(y == cid)[0]
+                if idx.size == 0:
+                    continue
+                row = X[idx[0]]
+                g_bits = boolvec_to_grid(row)
+                g_png  = sample_png_to_grid25(png)
+                if not np.array_equal(g_bits, g_png):
+                    symbol_mismatches.append((cid, sym, str(png)))
+            log(f""Symbol grid parity mismatches: {len(symbol_mismatches)}"")
+            if symbol_mismatches:
+                with open(out_dir/""symbol_parity_mismatches.txt"",""w"",encoding=""utf-8"") as f:
+                    for cid, sym, p in symbol_mismatches:
+                        f.write(f""class {cid} symbol '{sym}' mismatch vs {p}\n"")
+        else:
+            log(f""(Skip symbol parity) file not found: {sym_json}"")
+
+    # -------- Montages (quick visual scan) --------
+    if args.montages:
+        mdir = out_dir / ""montages""
+        mdir.mkdir(parents=True, exist_ok=True)
+        # Choose some classes: first k digits and first k symbols that exist
+        digit_sel = [cid for cid in labels_present if cid <= 625][: args.montage_classes]
+        symbol_sel = [cid for cid in labels_present if cid > 625][: args.montage_classes]
+        def montage_for_class(cid: int, max_samples: int = 16):
+            idx = np.where(y == cid)[0][:max_samples]
+            if idx.size == 0:
+                return
+            imgs = []
+            for i in idx:
+                g = boolvec_to_grid(X[i])
+                imgs.append(grid_to_image(g, cell_px=8, draw_grid=False))
+            # stitch into grid 4x4
+            cols = 4
+            rows = int(np.ceil(len(imgs)/cols))
+            w, h = imgs[0].width, imgs[0].height
+            out = Image.new(""RGB"", (cols*w, rows*h), (230,230,230))
+            k = 0
+            for r in range(rows):
+                for c in range(cols):
+                    if k >= len(imgs): break
+                    out.paste(imgs[k], (c*w, r*h))
+                    k += 1
+            meta = class_map.get(str(cid), {})
+            name = meta.get(""label"", f""DIGIT_{meta.get('digit')}"") if meta.get(""type"")==""SYMBOL"" else f""DIGIT_{meta.get('digit')}""
+            out.save(mdir / f""class_{cid:04d}_{name}.png"")
+
+        for cid in digit_sel + symbol_sel:
+            montage_for_class(cid, max_samples=args.montage_samples)
+        log(f""Wrote montages to {mdir}"")
+
+    # -------- Quick-train sanity --------
+    if args.quick_train:
+        if not HAVE_SK:
+            log(""scikit-learn not installed; skip quick-train."")
+        else:
+            from sklearn.metrics import classification_report
+            Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+            clf = MLPClassifier(hidden_layer_sizes=(256,128,64), activation=""relu"", solver=""adam"",
+                                alpha=1e-4, batch_size=512, max_iter=30, verbose=False)
+            clf.fit(Xtr, ytr)
+            ypr = clf.predict(Xte)
+            rep = classification_report(yte, ypr, digits=4, zero_division=0)
+            with open(out_dir/""quick_train_report.txt"",""w"") as f:
+                f.write(rep)
+            log(""Quick-train report written to quick_train_report.txt"")
+
+    # -------- Write report --------
+    with open(out_dir/""validation_report.txt"",""w"",encoding=""utf-8"") as f:
+        f.write(""\n"".join(report_lines))
+    log(f""Done. Report at {out_dir/'validation_report.txt'}"")
+
+if __name__ == ""__main__"":
+    main()
+"
+folder,folder,data,data,,0,2025-10-25T18:25:51Z,,"Contains 1 subfolder(s), 0 file(s).",
+folder,folder,data/bits,bits,,0,2025-10-25T18:32:25Z,,"Contains 1 subfolder(s), 5 file(s).",
+file,json,data/bits/class_map.json,class_map.json,.json,37001,2025-10-25T18:25:51Z,75c4adb4a7a04d8bdab415c01e3c86a5e6e7a647e513644f668f9afb8d7c42d0,"Top-level keys: 0:object(keys=2), 1:object(keys=2), 2:object(keys=2), 3:object(keys=2), 4:object(keys=2), 5:object(keys=2), 6:object(keys=2), 7:object(keys=2), 8:object(keys=2), 9:object(keys=2), 10:object(keys=2), 11:object(keys=2), 12:object(keys=2), 13:object(keys=2), 14:object(keys=2), 15:object(keys=2), 16:object(keys=2), 17:object(keys=2), 18:object(keys=2), 19:object(keys=2), 20:object(keys=2), 21:object(keys=2), 22:object(keys=2), 23:object(keys=2), 24:object(keys=2), 25:object(keys=2), 26:object(keys=2), 27:object(keys=2), 28:object(keys=2), 29:object(keys=2), 30:object(keys=2), 31:object(keys=2), 32:object(keys=2), 33:object(keys=2), 34:object(keys=2), 35:object(keys=2), 36:object(keys=2), 37:object(keys=2), 38:object(keys=2), 39:object(keys=2), 40:object(keys=2), 41:object(keys=2), 42:object(keys=2), 43:object(keys=2), 44:object(keys=2), 45:object(keys=2), 46:object(keys=2), 47:object(keys=2), 48:object(keys=2), 49:object(keys=2), 50:object(keys=2), 51:object(keys=2), 52:object(keys=2), 53:object(keys=2), 54:object(keys=2), 55:object(keys=2), 56:object(keys=2), 57:object(keys=2), 58:object(keys=2), 59:object(keys=2), 60:object(keys=2), 61:object(keys=2), 62:object(keys=2), 63:object(keys=2), 64:object(keys=2), 65:object(keys=2), 66:object(keys=2), 67:object(keys=2), 68:object(keys=2), 69:object(keys=2), 70:object(keys=2), 71:object(keys=2), 72:object(keys=2), 73:object(keys=2), 74:object(keys=2), 75:object(keys=2), 76:object(keys=2), 77:object(keys=2), 78:object(keys=2), 79:object(keys=2), 80:object(keys=2), 81:object(keys=2), 82:object(keys=2), 83:object(keys=2), 84:object(keys=2), 85:object(keys=2), 86:object(keys=2), 87:object(keys=2), 88:object(keys=2), 89:object(keys=2), 90:object(keys=2), 91:object(keys=2), 92:object(keys=2), 93:object(keys=2), 94:object(keys=2), 95:object(keys=2), 96:object(keys=2), 97:object(keys=2), 98:object(keys=2), 99:object(keys=2) (+537 more keys)",
+file,table,data/bits/dataset.csv,dataset.csv,.csv,801705,2025-10-25T18:25:51Z,c0977ff97e61affad8d5a7e1c7eef35476f6f00831623a9d61a6f640d1b3118e,"Headers: y, x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x30, x31, x32, x33, x34, x35, x36, x37, x38, x39, x40, x41, x42, x43, x44, x45, x46, x47, x48, x49, x50, x51, x52, x53, x54, x55, x56, x57, x58, x59, x60, x61, x62, x63, x64, x65, x66, x67, x68, x69, x70, x71, x72, x73, x74, x75, x76, x77, x78, x79, x80, x81, x82, x83, x84, x85, x86, x87, x88, x89, x90, x91, x92, x93, x94, x95, x96, x97, x98, x99, x100, x101, x102, x103, x104, x105, x106, x107, x108, x109, x110, x111, x112, x113, x114, x115, x116, x117, x118, x119, x120, x121, x122, x123, x124, x125, x126, x127, x128, x129, x130, x131, x132, x133, x134, x135, x136, x137, x138, x139, x140, x141, x142, x143, x144, x145, x146, x147, x148, x149, x150, x151, x152, x153, x154, x155, x156, x157, x158, x159, x160, x161, x162, x163, x164, x165, x166, x167, x168, x169, x170, x171, x172, x173, x174, x175, x176, x177, x178, x179, x180, x181, x182, x183, x184, x185, x186, x187, x188, x189, x190, x191, x192, x193, x194, x195, x196, x197, x198, x199, x200, x201, x202, x203, x204, x205, x206, x207, x208, x209, x210, x211, x212, x213, x214, x215, x216, x217, x218, x219, x220, x221, x222, x223, x224, x225, x226, x227, x228, x229, x230, x231, x232, x233, x234, x235, x236, x237, x238, x239, x240, x241, x242, x243, x244, x245, x246, x247, x248, x249, x250, x251, x252, x253, x254, x255, x256, x257, x258, x259, x260, x261, x262, x263, x264, x265, x266, x267, x268, x269, x270, x271, x272, x273, x274, x275, x276, x277, x278, x279, x280, x281, x282, x283, x284, x285, x286, x287, x288, x289, x290, x291, x292, x293, x294, x295, x296, x297, x298, x299, x300, x301, x302, x303, x304, x305, x306, x307, x308, x309, x310, x311, x312, x313, x314, x315, x316, x317, x318, x319, x320, x321, x322, x323, x324, x325, x326, x327, x328, x329, x330, x331, x332, x333, x334, x335, x336, x337, x338, x339, x340, x341, x342, x343, x344, x345, x346, x347, x348, x349, x350, x351, x352, x353, x354, x355, x356, x357, x358, x359, x360, x361, x362, x363, x364, x365, x366, x367, x368, x369, x370, x371, x372, x373, x374, x375, x376, x377, x378, x379, x380, x381, x382, x383, x384, x385, x386, x387, x388, x389, x390, x391, x392, x393, x394, x395, x396, x397, x398, x399, x400, x401, x402, x403, x404, x405, x406, x407, x408, x409, x410, x411, x412, x413, x414, x415, x416, x417, x418, x419, x420, x421, x422, x423, x424, x425, x426, x427, x428, x429, x430, x431, x432, x433, x434, x435, x436, x437, x438, x439, x440, x441, x442, x443, x444, x445, x446, x447, x448, x449, x450, x451, x452, x453, x454, x455, x456, x457, x458, x459, x460, x461, x462, x463, x464, x465, x466, x467, x468, x469, x470, x471, x472, x473, x474, x475, x476, x477, x478, x479, x480, x481, x482, x483, x484, x485, x486, x487, x488, x489, x490, x491, x492, x493, x494, x495, x496, x497, x498, x499, x500, x501, x502, x503, x504, x505, x506, x507, x508, x509, x510, x511, x512, x513, x514, x515, x516, x517, x518, x519, x520, x521, x522, x523, x524, x525, x526, x527, x528, x529, x530, x531, x532, x533, x534, x535, x536, x537, x538, x539, x540, x541, x542, x543, x544, x545, x546, x547, x548, x549, x550, x551, x552, x553, x554, x555, x556, x557, x558, x559, x560, x561, x562, x563, x564, x565, x566, x567, x568, x569, x570, x571, x572, x573, x574, x575, x576, x577, x578, x579, x580, x581, x582, x583, x584, x585, x586, x587, x588, x589, x590, x591, x592, x593, x594, x595, x596, x597, x598, x599, x600, x601, x602, x603, x604, x605, x606, x607, x608, x609, x610, x611, x612, x613, x614, x615, x616, x617, x618, x619, x620, x621, x622, x623, x624",
+file,other,data/bits/dataset.npz,dataset.npz,.npz,5114,2025-10-25T18:25:51Z,d55be5dcb4d51d53f35c6860c8b0e87e758b81b3812dba6a0eb8ce88a318fad3,,
+file,other,data/bits/X.npy,X.npy,.npy,398253,2025-10-25T18:25:51Z,38effad1db887b61a88f316dfb9960f392447841028041fa70b61916c0d1915e,,
+file,other,data/bits/y.npy,y.npy,.npy,5224,2025-10-25T18:25:51Z,628ff46588662e328809570ce345627afe9f480db3f25d3e25070e883cdcf258,,
+folder,folder,data/bits/validation_output,validation_output,,0,2025-10-25T18:32:25Z,,"Contains 1 subfolder(s), 2 file(s).",
+file,table,data/bits/validation_output/class_counts.csv,class_counts.csv,.csv,14429,2025-10-25T18:32:25Z,2beea7cff9adb40251204f20dea57fd8098db65b3f7220d5bdf45ee6ec0700fe,"Headers: class_id, type, label_or_digit, count",
+folder,folder,data/bits/validation_output/montages,montages,,0,2025-10-25T18:32:25Z,,"Contains 0 subfolder(s), 23 file(s).",
+file,image,data/bits/validation_output/montages/class_0000_DIGIT_0.png,class_0000_DIGIT_0.png,.png,997,2025-10-25T18:32:25Z,9474cb3bbf818a65474a63f1925e129f38ab062c3d1095bd82594988674a4e33,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0001_DIGIT_1.png,class_0001_DIGIT_1.png,.png,1007,2025-10-25T18:32:25Z,d6707c3c3006ffe68a26e3f8b787aea743b00072494e44499cdcf11ba60351ab,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0002_DIGIT_2.png,class_0002_DIGIT_2.png,.png,1010,2025-10-25T18:32:25Z,c37bbfb1403d06cdb18cc51afaf1efd8eab8e761f74f682a0f110393869f8817,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0003_DIGIT_3.png,class_0003_DIGIT_3.png,.png,1010,2025-10-25T18:32:25Z,ce5234bc80c9344029226f1e90f34d321e6a33f29943cd44bf24b30586104daf,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0004_DIGIT_4.png,class_0004_DIGIT_4.png,.png,1008,2025-10-25T18:32:25Z,8251093b531e93ad02fa1ec772443a5abf9ffd684c02981787dde48a303f44f2,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0005_DIGIT_5.png,class_0005_DIGIT_5.png,.png,1006,2025-10-25T18:32:25Z,5d6aef1df8e6819b460c1fa8eb7a043108bc86f0ae59e62c5582e40a8292fb54,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0006_DIGIT_6.png,class_0006_DIGIT_6.png,.png,1006,2025-10-25T18:32:25Z,719d2a8aceb889072b647b8a6f3075daf99dcf3bb9213ff1dd9086bf0194e371,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0007_DIGIT_7.png,class_0007_DIGIT_7.png,.png,1007,2025-10-25T18:32:25Z,bea03a7c9378483a3dad6b6ed81419af96a1421034160a4f854613c46a8756e6,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0008_DIGIT_8.png,class_0008_DIGIT_8.png,.png,1007,2025-10-25T18:32:25Z,23fa1d0c5d2f051bebddae18c0fd9e8d81c8a48a9bbc3ce3e868ae8b1cd706b9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0009_DIGIT_9.png,class_0009_DIGIT_9.png,.png,1009,2025-10-25T18:32:25Z,18ac99ad4445c374f80581738d308510ea3056646799d4006d81d1e3ecfef817,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0010_DIGIT_10.png,class_0010_DIGIT_10.png,.png,1009,2025-10-25T18:32:25Z,2777675fe8ba71e41d1614d0e035de72179756cf881afac5408fda5650737d56,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0011_DIGIT_11.png,class_0011_DIGIT_11.png,.png,1005,2025-10-25T18:32:25Z,a84874bdaf41a5810c60a966f54da7054860b7851cc6699d9fa87b3dc41d0434,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0626_FACTORIAL.png,class_0626_FACTORIAL.png,.png,1041,2025-10-25T18:32:25Z,8c773ebb2a64a17930d51f62083309fc1cfa2662d5ae52810a134acf29baec1a,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0627_LPAREN.png,class_0627_LPAREN.png,.png,1049,2025-10-25T18:32:25Z,cd4f06f05cf4bc8aa318263d0a259e1a85738ec4821b7db345e5dd6a4e1e26d9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0628_RPAREN.png,class_0628_RPAREN.png,.png,1051,2025-10-25T18:32:25Z,6f32c9815b813c9fd210018b1d139f12fd0cb1e3c78f1a446acb70ad37879c86,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0629_PLUS.png,class_0629_PLUS.png,.png,1048,2025-10-25T18:32:25Z,4494791d2d2c5bc042fa5069767ceb643addd760ecd9b9f793377320aa712d62,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0630_MINUS.png,class_0630_MINUS.png,.png,1016,2025-10-25T18:32:25Z,d2d7995f157800e1154509b30baae89b2bccb24d415657566c06756d177463d9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0631_DOT.png,class_0631_DOT.png,.png,1022,2025-10-25T18:32:25Z,f510c751d0d7071ea7e4d46f4ca028bb53c639fd50d90a070deb1d678b4436a9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0632_DIV.png,class_0632_DIV.png,.png,1050,2025-10-25T18:32:25Z,5425bc654e4314eb30f3cdbbb72a1ec05291302a90973d0c0a7a34ebc091e1ac,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0633_EQUALS.png,class_0633_EQUALS.png,.png,1029,2025-10-25T18:32:25Z,76784a226d4dfc50e62c76575ebe919048a1477dbf8207ac773f1f2b247e93e9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0634_POW.png,class_0634_POW.png,.png,1050,2025-10-25T18:32:25Z,4a7f45eaf10aef36e4a462232cd631ca0f590470714d9cef6bf6568805cd74f9,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0635_X.png,class_0635_X.png,.png,1059,2025-10-25T18:32:25Z,9a014d4149365948e5dc2d3ef68233604ed15ec656e3654a2e31d9cc8dfa34fa,"Image: format=PNG, size=804x201",
+file,image,data/bits/validation_output/montages/class_0636_SQRT.png,class_0636_SQRT.png,.png,1057,2025-10-25T18:32:25Z,3e5b618e4066cbd7c9a2088affcbc66ebdc9ed076d1cc0cac51fc52a098b16e3,"Image: format=PNG, size=804x201",
+folder,folder,out,out,,0,2025-10-24T17:23:34Z,,"Contains 2 subfolder(s), 0 file(s).",
+folder,folder,out/digits_0_625_row,digits_0_625_row,,0,2025-10-24T17:06:32Z,,"Contains 0 subfolder(s), 628 file(s).",
+file,image_collection,out/digits_0_625_row/*,digits_0_625_row (images),,930486,2025-10-24T17:06:32Z,,"Image collection: count=626 | total_bytes=930,486 | formats={ PNG:626 } | size(min/med/max)=501x501/501x501/501x501 | samples=[sym_000.png, sym_001.png, sym_002.png, sym_003.png, sym_004.png]",
+file,table,out/digits_0_625_row/decode_table.csv,decode_table.csv,.csv,85612,2025-10-24T17:06:32Z,8b6015ffd5ff7a00eb94e85c63d485687f105219f96c9335c5cec3360c4a98c8,"Headers: number, filename, path, mode, order, cell_px, gridlines, black_cells, sha256",
+file,json,out/digits_0_625_row/decode_table.json,decode_table.json,.json,206382,2025-10-24T17:06:32Z,84afb3de53e0b1bcb2cadd241e88b58ab9682170fb145ae39d4a25f027b55ab1,Top-level keys: items:array(len=626),
+folder,folder,out/symbols,symbols,,0,2025-10-24T17:37:32Z,,"Contains 0 subfolder(s), 13 file(s).",
+file,image_collection,out/symbols/*,symbols (images),,23258,2025-10-24T17:37:32Z,,"Image collection: count=11 | total_bytes=23,258 | formats={ PNG:11 } | size(min/med/max)=501x501/501x501/501x501 | samples=[sym_20251024_182904.png, sym_20251024_182933.png, sym_20251024_183005.png, sym_20251024_183055.png, sym_20251024_183119.png]",
+file,table,out/symbols/decode_table_symbols.csv,decode_table_symbols.csv,.csv,1794,2025-10-24T17:37:04Z,6d778a9a298bf7aa369dda91bebeb9ad355f5eb92c8765780c7639b5778bae1d,"Headers: label, filename, path, sha256, black_cells, cell_px, gridlines, autocentered",
+file,json,out/symbols/decode_table_symbols.json,decode_table_symbols.json,.json,3872,2025-10-24T17:48:12Z,d58c18ce8107d20362424241b6c3055124d796c3fa33ab0f2f6146d8f1b99614,Top-level keys: items:array(len=11),

@@ -1,0 +1,13 @@
+__pycache__/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+*$py.class
+
+# macOS metadata
+.DS_Store

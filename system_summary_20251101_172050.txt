@@ -1,0 +1,187 @@
+Core
+----
+Timestamp: 2025-11-01T17:20:50.657872
+Hostname: michael-NucBox-EVO-X2
+User: michael
+OS: Linux-6.8.0-87-generic-x86_64-with-glibc2.35
+Kernel: Linux 6.8.0-87-generic (build #88~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Oct 14 14:03:14 UTC 2)
+Architecture: x86_64
+Python (this run): 3.10.12 (main, Aug 15 2025, 14:32:43) [GCC 11.4.0]
+Working directory: /media/michael/D/projects/base 625
+Virtual env: (none)
+PATH: /home/michael/.local/bin:/opt/rocm/bin:/tmp/.tmp3FnQir:/home/michael/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/vendor/x86_64-unknown-linux-musl/path:/home/michael/.nvm/versions/node/v24.11.0/bin:/home/michael/.local/bin:/home/michael/.local/bin:/home/michael/.local/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/snap/bin
+
+OS Details
+----------
+/etc/os-release:
+  PRETTY_NAME="Ubuntu 22.04.5 LTS"
+  NAME="Ubuntu"
+  VERSION_ID="22.04"
+  VERSION="22.04.5 LTS (Jammy Jellyfish)"
+  VERSION_CODENAME=jammy
+  ID=ubuntu
+  ID_LIKE=debian
+  HOME_URL="https://www.ubuntu.com/"
+  SUPPORT_URL="https://help.ubuntu.com/"
+  BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+  PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+  UBUNTU_CODENAME=jammy
+
+Uptime: up 1 day, 23 hours, 15 minutes
+Boot time: 2025-10-30 18:05:49
+
+CPU & Memory
+------------
+Logical CPUs: 32
+Model: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S
+CPU Info (lscpu):
+  Architecture:                         x86_64
+  CPU op-mode(s):                       32-bit, 64-bit
+  Address sizes:                        48 bits physical, 48 bits virtual
+  Byte Order:                           Little Endian
+  CPU(s):                               32
+  On-line CPU(s) list:                  0-31
+  Vendor ID:                            AuthenticAMD
+  Model name:                           AMD RYZEN AI MAX+ 395 w/ Radeon 8060S
+  CPU family:                           26
+  Model:                                112
+  Thread(s) per core:                   2
+  Core(s) per socket:                   16
+  Socket(s):                            1
+  Stepping:                             0
+  CPU max MHz:                          5185.0000
+  CPU min MHz:                          599.0000
+  BogoMIPS:                             5989.06
+  Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc amd_ibpb_ret arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d
+  Virtualisation:                       AMD-V
+  L1d cache:                            768 KiB (16 instances)
+  L1i cache:                            512 KiB (16 instances)
+  L2 cache:                             16 MiB (16 instances)
+  L3 cache:                             64 MiB (2 instances)
+  NUMA node(s):                         1
+  NUMA node0 CPU(s):                    0-31
+  Vulnerability Gather data sampling:   Not affected
+  Vulnerability Itlb multihit:          Not affected
+  Vulnerability L1tf:                   Not affected
+  Vulnerability Mds:                    Not affected
+  Vulnerability Meltdown:               Not affected
+  Vulnerability Mmio stale data:        Not affected
+  Vulnerability Reg file data sampling: Not affected
+  Vulnerability Retbleed:               Not affected
+  Vulnerability Spec rstack overflow:   Not affected
+  Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
+  Vulnerability Spectre v1:             Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+  Vulnerability Spectre v2:             Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+  Vulnerability Srbds:                  Not affected
+  Vulnerability Tsx async abort:        Not affected
+  Vulnerability Vmscape:                Not affected
+
+MemTotal: 32486584 kB
+MemAvailable: 20139176 kB
+Memory (free -h):
+  total        used        free      shared  buff/cache   available
+  Mem:            30Gi       7.1Gi       1.6Gi       5.0Gi        22Gi        19Gi
+  Swap:          2.0Gi       1.9Gi        73Mi
+
+GPU & Accelerators
+------------------
+nvidia-smi:
+  nvidia-smi (not installed)
+lspci (VGA):
+  c6:00.0 Display controller: Advanced Micro Devices, Inc. [AMD/ATI] Device 1586 (rev c1)
+
+Storage
+-------
+Project root: /media/michael/D/projects/base 625
+Disk usage at root: total=475.50 GiB, used=223.54 GiB, free=251.96 GiB
+df -h:
+  Filesystem      Size  Used Avail Use% Mounted on
+  tmpfs           3.1G  2.8M  3.1G   1% /run
+  /dev/nvme1n1p5  492G  312G  155G  67% /
+  tmpfs            16G   14M   16G   1% /dev/shm
+  tmpfs           5.0M  4.0K  5.0M   1% /run/lock
+  efivarfs        128K   50K   74K  41% /sys/firmware/efi/efivars
+  tmpfs            16G     0   16G   0% /run/qemu
+  /dev/nvme0n1p1  256M   75M  182M  30% /boot/efi
+  tmpfs           3.1G  1.7M  3.1G   1% /run/user/1000
+  /dev/sda2       7.3T  481G  6.9T   7% /media/michael/A6A4D8E2A4D8B651
+  /dev/nvme1n1p3  1.4T  794G  613G  57% /media/michael/Windows
+  /dev/nvme0n1p3  476G  224G  252G  48% /media/michael/D
+
+Toolchain Versions
+------------------
+git: git version 2.34.1
+gcc: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+clang: clang (not installed)
+cmake: cmake version 3.22.1
+make: GNU Make 4.3
+python3: Python 3.10.12
+python: python (not installed)
+pip: pip 22.0.2 from /usr/lib/python3/dist-packages/pip (python 3.10)
+node: v24.11.0
+npm: 11.6.1
+yarn: yarn (not installed)
+java: java (not installed)
+
+Python Environment
+------------------
+Interpreter: /usr/bin/python3
+Version: 3.10.12 (main, Aug 15 2025, 14:32:43) [GCC 11.4.0]
+Packages:
+  amdsmi==26.0.2+39589fda
+  anyio==4.11.0
+  appdirs==1.4.4
+  apturl==0.5.2
+  argcomplete==1.8.1
+  attrs==21.2.0
+  bcrypt==3.2.0
+  beautifulsoup4==4.10.0
+  beniget==0.4.1
+  blinker==1.4
+  Brlapi==0.8.3
+  Brotli==1.0.9
+  certifi==2020.6.20
+  chardet==4.0.0
+  click==8.0.3
+  click-plugins==1.1.1
+  colorama==0.4.4
+  command-not-found==0.3
+  cryptography==3.4.8
+  cupshelpers==1.0
+  ... (118 more)
+
+Networking
+----------
+IP configuration:
+  (exit 1)
+  Cannot open netlink socket: Operation not permitted
+
+DNS:
+  # This is /run/systemd/resolve/stub-resolv.conf managed by man:systemd-resolved(8).
+  # Do not edit.
+  #
+  # This file might be symlinked as /etc/resolv.conf. If you're looking at
+  # /etc/resolv.conf and seeing this text, you have followed the symlink.
+  #
+  # This is a dynamic resolv.conf file for connecting local clients to the
+  # internal DNS stub resolver of systemd-resolved. This file lists all
+  # configured search domains.
+  #
+  # Run "resolvectl status" to see details about the uplink DNS servers
+  # currently in use.
+  #
+  # Third party programs should typically not access this file directly, but only
+  # through the symlink at /etc/resolv.conf. To manage man:resolv.conf(5) in a
+  # different way, replace this symlink by a static file or a different symlink.
+  #
+  # See man:systemd-resolved.service(8) for details about the supported modes of
+  # operation for /etc/resolv.conf.
+
+  nameserver 127.0.0.53
+  options edns0 trust-ad
+  search home
+
+Running Services
+----------------
+  (exit 1)
+  Failed to connect to bus: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)
