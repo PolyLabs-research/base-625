@@ -34,6 +34,7 @@ from base625_grid import (
     encode_digit,
     encode_number_as_count,
     grid_to_image,
+    resolve_asset_path,
 )
 
 # ---------- Config ----------
@@ -97,8 +98,8 @@ def load_symbols(json_path: Path) -> dict[str, SymbolGlyph]:
     table: dict[str, SymbolGlyph] = {}
     for item in obj.get("items", []):
         sym = (item.get("symbol") or "").strip()
-        p = Path(item.get("path", ""))
-        if sym and p.exists():
+        p = resolve_asset_path(item, json_path)
+        if sym and p is not None:
             try:
                 img = Image.open(p).convert("RGB")
                 table[sym] = SymbolGlyph(symbol=sym, path=p, image=img)

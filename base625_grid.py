@@ -33,6 +33,7 @@ import json
 import math
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 
 import numpy as np
@@ -214,6 +215,31 @@ SYMBOLS: Dict[str, np.ndarray] = {
 }
 
 
+def resolve_asset_path(item: Dict, table_path: Optional[Path] = None, max_parents: int = 3) -> Optional[Path]:
+    """Locate the PNG referenced by a decode-table item.
+
+    Decode tables written on Windows carry backslash paths relative to the repo
+    root, which do not resolve on Linux/macOS. Candidates are tried in order:
+    the item's ``filename`` next to the table file, the normalised ``path``
+    relative to the current directory, then relative to the table's parents.
+    Returns None when nothing exists.
+    """
+    candidates: List[Path] = []
+    filename = (item.get("filename") or "").strip()
+    raw_path = (item.get("path") or "").replace("\\", "/").strip()
+    if table_path is not None and filename:
+        candidates.append(Path(table_path).parent / filename)
+    if raw_path:
+        candidates.append(Path(raw_path))
+        if table_path is not None:
+            for parent in list(Path(table_path).resolve().parents)[:max_parents]:
+                candidates.append(parent / raw_path)
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return None
+
+
 def decode_symbol(grid: np.ndarray) -> Optional[str]:
     """Exact boolean match decoder. Returns symbol name or None."""
     for name, g in SYMBOLS.items():
@@ -316,8 +342,15 @@ def encode_number_as_count(k: int, order: str = "row") -> np.ndarray:
 
 
 def encode_digit(d: int, order: str = "row") -> np.ndarray:
-    if not (0 <= d <= 625):                     # was 0..624
-        raise ValueError("Base-626 digit must be in [0, 625]")
+    """Render a single base-625 digit (0..624) as a panel.
+
+    The full grid (625 cells) is also accepted so that callers using the
+    626-state "base-626" convention (calculator, number viewer) can render
+    their top digit; it is NOT a valid base-625 digit and is not a token in
+    the Symbolic-Transformers vocabulary.
+    """
+    if not (0 <= d <= GRID_CELLS):
+        raise ValueError(f"Digit must be in [0, {GRID_CELLS}] (0..624 are base-625 digits; {GRID_CELLS} is the reserved full grid)")
     return fill_k_cells(d, order=order, n=GRID_N)
 
 

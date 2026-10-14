@@ -32,6 +32,7 @@ from base625_grid import (
     GRID_CELLS,
     encode_digit,
     encode_number_as_count,
+    resolve_asset_path,
 )
 
 DEFAULT_SYMBOLS_JSON = Path("out") / "symbols" / "decode_table_symbols.json"
@@ -175,8 +176,12 @@ def main():
         seen_syms = set()
         for item in symbols_items:
             sym = (item.get("symbol") or "").strip()
-            p = Path(item.get("path", ""))
-            if not sym or not p.exists():
+            if not sym:
+                continue
+            p = resolve_asset_path(item, sym_json_path)
+            if p is None:
+                print(f"  WARNING: PNG for symbol {sym!r} not found "
+                      f"({item.get('filename') or item.get('path')}); skipping")
                 continue
             if sym in seen_syms:
                 continue
@@ -208,6 +213,19 @@ def main():
     # Save class map
     with open(outdir / "class_map.json", "w", encoding="utf-8") as f:
         json.dump(id_to_meta, f, indent=2, ensure_ascii=False)
+
+    # Save generation settings so validators can account for augmentation.
+    meta = {
+        "include": args.include,
+        "order": args.order,
+        "copies": args.copies,
+        "noise_flip": args.noise_flip,
+        "seed": args.seed,
+        "symbols_json": str(sym_json_path) if "symbols" in args.include else None,
+        "n_samples": int(X.shape[0]),
+    }
+    with open(outdir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
 
     # Optional CSV
     if args.csv:

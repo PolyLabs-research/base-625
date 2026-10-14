@@ -24,6 +24,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw
 
+from base625_grid import resolve_asset_path
+
 # Optional quick-train
 try:
     from sklearn.model_selection import train_test_split
@@ -109,6 +111,16 @@ def main():
 
     log(f"Loaded: X={X.shape} dtype={X.dtype}, y={y.shape} dtype={y.dtype}, classes in map={len(class_map)}")
 
+    # Generation settings (written by gen_bit_dataset.py). Noise augmentation
+    # changes bit-sums and breaks exact parity, so the checks below adapt.
+    noise_flip = 0.0
+    meta_path = data_dir / "meta.json"
+    if meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            noise_flip = float(json.load(f).get("noise_flip", 0.0) or 0.0)
+    if noise_flip > 0:
+        log(f"Dataset was generated with noise_flip={noise_flip}; using noise-aware tolerances")
+
     # -------- Schema checks --------
     ok_vals = np.isin(X, [0,1]).all()
     log(f"Values in X are only 0/1: {ok_vals}")
@@ -172,7 +184,11 @@ def main():
             continue
         sums = X[idx].sum(axis=1)  # (k,)
         mean_sum = float(sums.mean())
-        if not np.isclose(mean_sum, d, atol=0.1):
+        # With independent bit flips at rate p, E[sum] = d + p*(625 - 2d).
+        expected = d + noise_flip * (625 - 2 * d)
+        std = np.sqrt(625 * noise_flip * (1 - noise_flip) / max(1, idx.size))
+        atol = 0.1 + 5 * std
+        if not np.isclose(mean_sum, expected, atol=atol):
             inconsistent.append((d, mean_sum))
     log(f"Digit self-consistency issues: {len(inconsistent)}")
     if inconsistent:
@@ -190,8 +206,8 @@ def main():
             sym_to_png = {}
             for it in sym_obj.get("items", []):
                 sym = (it.get("symbol") or "").strip()
-                pth = Path(it.get("path",""))
-                if sym and pth.exists():
+                pth = resolve_asset_path(it, sym_json)
+                if sym and pth is not None:
                     sym_to_png[sym] = pth
             # Compare first sample per symbol class (if present)
             symbol_mismatches = []
@@ -210,7 +226,10 @@ def main():
                 row = X[idx[0]]
                 g_bits = boolvec_to_grid(row)
                 g_png  = sample_png_to_grid25(png)
-                if not np.array_equal(g_bits, g_png):
+                hamming = int(np.sum(g_bits != g_png))
+                # Allow a few flipped bits when the dataset was noise-augmented.
+                max_hamming = 0 if noise_flip <= 0 else int(np.ceil(625 * noise_flip * 5 + 1))
+                if hamming > max_hamming:
                     symbol_mismatches.append((cid, sym, str(png)))
             log(f"Symbol grid parity mismatches: {len(symbol_mismatches)}")
             if symbol_mismatches:
