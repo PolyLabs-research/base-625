@@ -57,7 +57,7 @@ def main():
         rows.append({
             "number": k,
             "filename": fname,
-            "path": str(fpath),
+            "path": fpath.as_posix(),  # forward slashes so tables work on every OS
             "mode": args.mode if k <= 624 else "count",
             "order": args.order,
             "cell_px": args.cell_px,

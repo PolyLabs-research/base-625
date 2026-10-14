@@ -19,7 +19,6 @@ Toolkit for experimenting with a 25×25 grid numeral system that encodes values 
 ## Quick Start
 
 ```bash
-cd "base 625"
 python3 collect_system_info.py            # snapshot current system
 python3 base625_grid.py -h                # discover rendering CLI options
 python3 symbol_painter.py                 # paint or edit operator glyphs
@@ -37,6 +36,24 @@ Output artifacts (PNG strips, JSON tables, datasets) land under `out/` or a user
 - **System snapshot:** `python3 collect_system_info.py` writes a fresh `system_summary_*.txt`.
 - **Spatial brain plots/checkpoints:** rerun the relevant experiment/train scripts under `spatial_brain/experiments` to regenerate figures and new checkpoints (only the most recent nav2d checkpoint is retained by default).
 
+## Numerals: base-625 digits vs. the full grid
+
+The grid has 625 cells, so a count-mode panel can show 626 states (0–625). Two conventions coexist:
+
+- **Base-625 digits (0–624).** Used by `int_to_base625`, the exported `decode_table`, and the
+  [Symbolic-Transformers](https://github.com/tripptytrip/Symbolic-Transformers) vocabulary, where
+  numeral token *k* is the panel with *k* filled cells. The full grid (625) is **not** a digit or a token.
+- **Base-626 (0–625).** Used only by the GUI conveniences `base626_calculator.py` and `number_viewer.py`,
+  which render 625 as the full grid in count mode.
+
+Treat the vocabulary convention as canonical for anything that feeds a model.
+
+## Decode tables and paths
+
+`symbol_painter.py` and `export_0_625.py` write decode tables with POSIX (`out/symbols/PLUS.png`) paths,
+and every loader resolves entries by `filename` next to the table file, so tables created on Windows now
+work on Linux/macOS too (older tables carried backslash paths that silently dropped symbols).
+
 ## Core Modules
 
 - `base625_grid.py` – Foundation for generating 25×25 boolean grids, digit encoders, symbol glyph definitions, dataset helpers, and image rendering utilities.
@@ -45,7 +62,8 @@ Output artifacts (PNG strips, JSON tables, datasets) land under `out/` or a user
 - `number_viewer.py` – Lightweight panel browser for exploring number encodings (count and digit modes).
 - `gen_bit_dataset.py` – Emits NumPy arrays (`X.npy`, `y.npy`, `dataset.npz`) and optional CSV/JSONL records of digits and symbols.
 - `export_0_625.py` – Convenience exporter for digit image strips and metadata.
-- `validate_bits_dataset.py` – Sanity-check generated datasets (shape, class mapping, basic statistics).
+- `validate_bits_dataset.py` – Sanity-check generated datasets (shape, class mapping, bit-sum and PNG parity, noise-aware when `--noise-flip` was used).
+- `tests/` – pytest suite for the grid, decode-table and dataset code (`python -m pytest tests`).
 - `collect_system_info.py` – Writes a timestamped `system_summary_*.txt` capturing OS, hardware, toolchain versions, Python environment, networking, and running services.
 
 ## Typical Workflows

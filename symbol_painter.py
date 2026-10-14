@@ -326,7 +326,7 @@ class SymbolPainter(tk.Tk):
             "label": label_raw,               # machine-ish name as entered
             "symbol": symbol_raw,             # pretty glyph
             "filename": fpath.name,
-            "path": str(fpath),
+            "path": fpath.as_posix(),  # forward slashes so tables work on every OS
             "sha256": sha,
             "black_cells": int(grid.sum()),
             "cell_px": int(self.cell_px_var.get()),

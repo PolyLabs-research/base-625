@@ -37,7 +37,7 @@ Use this document as a handoff guide for agents picking up the project.
 - **Interactive viewers:**
   - `python3 base626_calculator.py` renders expressions using saved glyphs (expects `out/symbols/decode_table_symbols.json`). Supports row/snake/random42 fill orders and resizable cell/gap.
   - `python3 number_viewer.py` shows a single number as base-626 digit panels.
-- **Conventions & gotchas:** 25×25 grid → 625 cells. In digit mode valid digits are 0–624; value 625 is represented via count-mode. Operator decoding in `base625_grid.py` is exact-boolean-match only. Regenerate decode table after glyph edits so downstream tools stay in sync.
+- **Conventions & gotchas:** 25×25 grid → 625 cells. Base-625 digits are 0–624 (this is what the Symbolic-Transformers vocabulary uses); the full grid (625) is reserved and only the base-626 GUI tools render it, via count mode. Operator decoding in `base625_grid.py` is exact-boolean-match only. Regenerate decode table after glyph edits so downstream tools stay in sync. Decode tables store POSIX paths and loaders resolve PNGs by `filename` next to the table, so tables made on Windows work everywhere.
 
 ## Spatial Brain Playground
 - **Concept:** cortical content vs control separation. Content vectors live on spatial substrates; beta fields gate updates, gamma modulates expression. WM tasks carve spatial “slots”.
@@ -57,6 +57,7 @@ Use this document as a handoff guide for agents picking up the project.
 ## Quick Start (handoff checklist)
 - Ensure Python env with `pip install pillow numpy` (+ `torch matplotlib streamlit` for spatial brain).
 - Run `python3 collect_system_info.py`.
+- Run the regression tests: `python -m pytest tests` (grid encoding, glyph decode table, dataset generation/validation).
 - If working on glyphs/datasets: refresh glyph decode table via `symbol_painter.py`, regenerate datasets with `gen_bit_dataset.py`, validate with `validate_bits_dataset.py`.
 - If working on spatial experiments: pick the appropriate runner under `spatial_brain/experiments/`, adjust CLI flags, and stash outputs under `spatial_brain/docs` or `out/` as needed.
 - Avoid altering or deleting existing untracked artifacts unless explicitly agreed; repo may be in a dirty state.
